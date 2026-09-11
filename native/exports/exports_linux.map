@@ -1,0 +1,5 @@
+{
+  global:
+    audiocpp_*;
+  local: *;
+};

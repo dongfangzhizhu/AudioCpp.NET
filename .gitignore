@@ -1,0 +1,12 @@
+bin/
+obj/
+build/
+artifacts/
+upstream/
+.vs/
+.vscode/
+*.user
+*.suo
+*.nupkg
+*.snupkg
+upstream-*-report.md

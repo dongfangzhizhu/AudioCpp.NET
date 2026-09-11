@@ -1,0 +1,5 @@
+audiocpp_buffer_free
+audiocpp_get_abi_info
+audiocpp_model_free
+audiocpp_model_load
+audiocpp_model_synthesize

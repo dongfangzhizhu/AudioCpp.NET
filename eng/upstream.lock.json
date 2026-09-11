@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/0xShug0/audio.cpp",
+  "commit": "78d47706c30ef215ba9ad3559baff309efeb5260",
+  "shortCommit": "78d47706c30e",
+  "branchAtPin": "main",
+  "describeAtPin": "last-docker-build-8-g78d4770",
+  "pinnedAtUtc": "2026-09-11T00:00:00Z",
+  "shimAbi": {
+    "major": 1,
+    "minor": 0
+  },
+  "build": {
+    "deploymentBuild": true,
+    "defaultBackend": "cpu",
+    "defaultModelSet": "custom",
+    "defaultModels": [
+      "qwen3_tts"
+    ],
+    "portableCpu": true
+  }
+}

@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AudioCpp.NET.Interop/AudioCpp.NET.Interop.csproj" />
+    <Project Path="src/AudioCpp.NET/AudioCpp.NET.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AudioCpp.NET.Tests/AudioCpp.NET.Tests.csproj" />
+  </Folder>
+</Solution>
