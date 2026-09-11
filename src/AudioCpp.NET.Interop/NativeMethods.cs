@@ -18,6 +18,9 @@ internal static partial class NativeMethods
         internal ulong Capabilities;
     }
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+    internal delegate void DownloadProgressCallback(ulong downloadedBytes, ulong totalBytes, IntPtr message, IntPtr userData);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_get_abi_info")]
     internal static partial int GetAbiInfo(ref AbiInfo info, IntPtr error, nuint errorLength);
 
@@ -31,6 +34,18 @@ internal static partial class NativeMethods
         string? loadOptionsJson,
         IntPtr error,
         nuint errorLength);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_get_loader_catalog")]
+    internal static partial int GetLoaderCatalog(out IntPtr json, IntPtr error, nuint errorLength);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_get_package_catalog")]
+    internal static partial int GetPackageCatalog(out IntPtr json, IntPtr error, nuint errorLength);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_install_package", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int InstallPackage(
+        string packageId, string? repositoryRoot, string? modelsRoot, int overwrite,
+        DownloadProgressCallback? progress, IntPtr progressUserData, out IntPtr message,
+        IntPtr error, nuint errorLength);
 
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_model_synthesize", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int ModelSynthesize(

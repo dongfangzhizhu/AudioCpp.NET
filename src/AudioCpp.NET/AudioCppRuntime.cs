@@ -31,6 +31,12 @@ public sealed record TtsRequest
 public sealed record AudioBuffer(ReadOnlyMemory<float> Samples, int SampleRate, int Channels);
 
 public sealed record AudioCppBuildInfo(uint AbiMajor, uint AbiMinor, string ShimVersion, string AudioCppCommit, string Backend, ulong Capabilities);
+public sealed record AudioCppLoader(string Family, string InstructionsPolicy, IReadOnlyList<string> ApiEndpoints,
+    IReadOnlyList<AudioCppLoaderTask> Tasks, IReadOnlyList<string> Languages,
+    bool SupportsSpeakerReference, bool SupportsStyleCondition, bool SupportsTimestamps);
+public sealed record AudioCppLoaderTask(string Task, IReadOnlyList<string> Modes);
+public sealed record AudioCppPackage(string Id, bool Installed, string State, string Message,
+    ulong? SizeBytes, string VersionState, string LocalRevision, string RemoteRevision);
 
 public sealed class AudioCppRuntime : IDisposable
 {
@@ -63,9 +69,68 @@ public sealed class AudioCppRuntime : IDisposable
         return new AudioCppModel(handle);
     }
 
+    public IReadOnlyList<AudioCppLoader> ListLoaders()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        try { return CatalogJson.ParseLoaders(InteropOperations.GetLoaderCatalog()); }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        { throw new AudioCppException(exception.Message, exception); }
+    }
+
+    public IReadOnlyList<AudioCppPackage> ListPackages()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        try { return CatalogJson.ParsePackages(InteropOperations.GetPackageCatalog()); }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        { throw new AudioCppException(exception.Message, exception); }
+    }
+
+    public string InstallPackage(string packageId, string modelsDirectory, bool overwrite = false,
+        Action<ulong, ulong, string?>? progress = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelsDirectory);
+        try { return InteropOperations.InstallPackage(packageId, ".", modelsDirectory, overwrite, progress); }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        { throw new AudioCppException(exception.Message, exception); }
+    }
+
     public void Dispose() => _disposed = true;
 
     internal static string? ToJson(IReadOnlyDictionary<string, string>? values) => values is null || values.Count == 0 ? null : JsonSerializer.Serialize(values);
+}
+
+internal static class CatalogJson
+{
+    internal static IReadOnlyList<AudioCppLoader> ParseLoaders(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("loaders").EnumerateArray().Select(loader =>
+            new AudioCppLoader(loader.GetProperty("family").GetString() ?? "",
+                loader.GetProperty("instructions_policy").GetString() ?? "",
+                Strings(loader, "api_endpoints"),
+                loader.GetProperty("tasks").EnumerateArray().Select(task => new AudioCppLoaderTask(
+                    task.GetProperty("task").GetString() ?? "", Strings(task, "modes"))).ToArray(),
+                Strings(loader, "languages"),
+                loader.GetProperty("supports_speaker_reference").GetBoolean(),
+                loader.GetProperty("supports_style_condition").GetBoolean(),
+                loader.GetProperty("supports_timestamps").GetBoolean())).ToArray();
+    }
+
+    internal static IReadOnlyList<AudioCppPackage> ParsePackages(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.EnumerateArray().Select(package => new AudioCppPackage(
+            package.GetProperty("id").GetString() ?? "", package.GetProperty("installed").GetBoolean(),
+            package.GetProperty("state").GetString() ?? "", package.GetProperty("message").GetString() ?? "",
+            package.GetProperty("size_bytes").ValueKind == JsonValueKind.Null ? null : package.GetProperty("size_bytes").GetUInt64(),
+            package.GetProperty("version_state").GetString() ?? "", package.GetProperty("local_revision").GetString() ?? "",
+            package.GetProperty("remote_revision").GetString() ?? "")).ToArray();
+    }
+
+    private static string[] Strings(JsonElement parent, string property) =>
+        parent.GetProperty(property).EnumerateArray().Select(item => item.GetString() ?? "").ToArray();
 }
 
 public sealed class AudioCppModel : IDisposable

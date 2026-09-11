@@ -18,6 +18,50 @@ internal static class InteropOperations
         return new AbiSnapshot(info.AbiMajor, info.AbiMinor, Utf8(info.ShimVersion), Utf8(info.AudioCppCommit), Utf8(info.Backend), info.Capabilities);
     }
 
+    internal static string GetLoaderCatalog()
+    {
+        using var error = new NativeErrorBuffer();
+        var status = NativeMethods.GetLoaderCatalog(out var json, error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return Marshal.PtrToStringUTF8(json) ?? "";
+        }
+        finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+    }
+
+    internal static string GetPackageCatalog()
+    {
+        using var error = new NativeErrorBuffer();
+        var status = NativeMethods.GetPackageCatalog(out var json, error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return Marshal.PtrToStringUTF8(json) ?? "";
+        }
+        finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+    }
+
+    internal static string InstallPackage(string packageId, string? repositoryRoot, string? modelsRoot,
+        bool overwrite, Action<ulong, ulong, string?>? progress)
+    {
+        using var error = new NativeErrorBuffer();
+        NativeMethods.DownloadProgressCallback? callback = null;
+        if (progress is not null)
+        {
+            callback = (downloaded, total, message, _) => progress(downloaded, total,
+                message == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(message));
+        }
+        var status = NativeMethods.InstallPackage(packageId, repositoryRoot, modelsRoot, overwrite ? 1 : 0,
+            callback, IntPtr.Zero, out var result, error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return Marshal.PtrToStringUTF8(result) ?? "";
+        }
+        finally { if (result != IntPtr.Zero) NativeMethods.BufferFree(result); }
+    }
+
     private static string Utf8(byte* value) => value is null ? string.Empty : Marshal.PtrToStringUTF8((IntPtr)value) ?? string.Empty;
 
     internal static unsafe (SafeModelHandle Handle, string Error) LoadModel(

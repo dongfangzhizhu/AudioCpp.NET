@@ -19,6 +19,22 @@ dotnet build AudioCpp.NET.slnx
 dotnet test AudioCpp.NET.slnx
 ```
 
+## Console model tools
+
+The console project lists the model loaders compiled into the pinned native
+shim and can install a package through audio.cpp's native model manager:
+
+```powershell
+dotnet run --project src/AudioCpp.NET.Console -- models list --native .\build\native-default\Release\audiocpp_dotnet_native.dll
+dotnet run --project src/AudioCpp.NET.Console -- models path
+dotnet run --project src/AudioCpp.NET.Console -- models download qwen3_tts_1_7b_base_q8_0 --models-dir .\models
+```
+
+The default native build supports `models list`. Build with
+`-DAUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON` to enable `models packages` and
+`models download`; that option requires the upstream package manager's TLS
+dependency (system OpenSSL or the pinned BoringSSL archive).
+
 ## Build native shim
 
 Use the pinned checkout already present beside this repository:
