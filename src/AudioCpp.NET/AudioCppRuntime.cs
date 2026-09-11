@@ -28,6 +28,14 @@ public sealed record TtsRequest
     public IReadOnlyDictionary<string, string>? Options { get; init; }
 }
 
+public sealed record AsrRequest
+{
+    public required ReadOnlyMemory<float> Audio { get; init; }
+    public required int SampleRate { get; init; }
+    public int Channels { get; init; } = 1;
+    public IReadOnlyDictionary<string, string>? Options { get; init; }
+}
+
 public sealed record AudioBuffer(ReadOnlyMemory<float> Samples, int SampleRate, int Channels);
 
 public sealed record AudioCppBuildInfo(uint AbiMajor, uint AbiMinor, string ShimVersion, string AudioCppCommit, string Backend, ulong Capabilities);
@@ -151,6 +159,23 @@ public sealed class AudioCppModel : IDisposable
             var result = InteropOperations.Synthesize(_handle, request.Task, request.Text, request.VoiceId,
                 request.ReferencePcm.Span, request.ReferenceSampleRate, AudioCppRuntime.ToJson(request.Options));
             return new AudioBuffer(result.Samples, result.SampleRate, result.Channels);
+        }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        {
+            throw new AudioCppInferenceException(exception.Message, exception);
+        }
+    }
+
+    public string Transcribe(AsrRequest request)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.Audio.IsEmpty) throw new ArgumentException("Audio is required.", nameof(request));
+        if (request.SampleRate <= 0 || request.Channels <= 0) throw new ArgumentException("SampleRate and Channels must be positive.", nameof(request));
+        try
+        {
+            return InteropOperations.Transcribe(_handle, request.Audio.Span, request.SampleRate, request.Channels,
+                AudioCppRuntime.ToJson(request.Options));
         }
         catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
         {

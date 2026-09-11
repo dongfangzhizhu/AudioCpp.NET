@@ -3,6 +3,7 @@ _audiocpp_get_abi_info
 _audiocpp_model_free
 _audiocpp_model_load
 _audiocpp_model_synthesize
+_audiocpp_model_transcribe
 _audiocpp_get_loader_catalog
 _audiocpp_get_package_catalog
 _audiocpp_install_package

@@ -65,6 +65,16 @@ AUDIOCPP_API int32_t audiocpp_model_synthesize(
     int32_t * out_channels,
     char * err,
     size_t errlen);
+AUDIOCPP_API int32_t audiocpp_model_transcribe(
+    audiocpp_model * model,
+    const float * audio_samples,
+    int32_t audio_count,
+    int32_t audio_sample_rate,
+    int32_t audio_channels,
+    const char * options_json,
+    char ** out_text,
+    char * err,
+    size_t errlen);
 AUDIOCPP_API int32_t audiocpp_get_loader_catalog(char ** out_json, char * err, size_t errlen);
 AUDIOCPP_API int32_t audiocpp_get_package_catalog(char ** out_json, char * err, size_t errlen);
 AUDIOCPP_API int32_t audiocpp_install_package(

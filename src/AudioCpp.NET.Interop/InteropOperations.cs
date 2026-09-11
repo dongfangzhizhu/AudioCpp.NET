@@ -100,6 +100,23 @@ internal static class InteropOperations
         }
     }
 
+    internal static unsafe string Transcribe(SafeModelHandle model, ReadOnlySpan<float> audio, int sampleRate,
+        int channels, string? options)
+    {
+        fixed (float* audioPtr = audio)
+        {
+            using var error = new NativeErrorBuffer();
+            var status = NativeMethods.ModelTranscribe(model, audioPtr, audio.Length, sampleRate, channels,
+                options, out var text, error.Pointer, (nuint)error.Length);
+            try
+            {
+                if (status != 0) throw new NativeCallException(status, error.Text);
+                return Marshal.PtrToStringUTF8(text) ?? string.Empty;
+            }
+            finally { if (text != IntPtr.Zero) NativeMethods.BufferFree(text); }
+        }
+    }
+
     internal sealed class NativeErrorBuffer : IDisposable
     {
         private readonly IntPtr _memory = Marshal.AllocHGlobal(ErrorBufferLength);

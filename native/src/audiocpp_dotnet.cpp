@@ -23,6 +23,7 @@
 namespace {
 constexpr const char * kCommit = "78d47706c30ef215ba9ad3559baff309efeb5260";
 constexpr uint64_t kTts = 1ull << 0;
+constexpr uint64_t kAsr = 1ull << 1;
 #ifndef AUDIOCPP_DOTNET_BACKEND
 #define AUDIOCPP_DOTNET_BACKEND "unknown"
 #endif
@@ -162,7 +163,7 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
     out_info->shim_version = "audiocpp-dotnet-shim 0.2.0";
     out_info->audio_cpp_commit = kCommit;
     out_info->backend = kBackend;
-    out_info->capabilities = kTts | (1ull << 1) | (1ull << 2);
+    out_info->capabilities = kTts | kAsr | (1ull << 2);
     return AUDIOCPP_OK;
 }
 
@@ -323,6 +324,46 @@ AUDIOCPP_API int32_t audiocpp_model_synthesize(audiocpp_model * context, const c
         set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED;
     } catch (...) {
         set_error(err, errlen, "unknown inference failure"); return AUDIOCPP_ERR_INFERENCE_FAILED;
+    }
+}
+
+AUDIOCPP_API int32_t audiocpp_model_transcribe(
+    audiocpp_model * context, const float * audio_samples, int32_t audio_count,
+    int32_t audio_sample_rate, int32_t audio_channels, const char * options_json,
+    char ** out_text, char * err, size_t errlen) {
+    if (context == nullptr || context->model == nullptr || audio_samples == nullptr || audio_count <= 0 ||
+        audio_sample_rate <= 0 || audio_channels <= 0 || out_text == nullptr) {
+        set_error(err, errlen, "invalid model, audio, or output argument");
+        return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_text = nullptr;
+    try {
+        engine::runtime::TaskSpec spec;
+        spec.task = engine::runtime::VoiceTaskKind::Asr;
+        spec.mode = engine::runtime::RunMode::Offline;
+        engine::runtime::SessionOptions session_options;
+        session_options.backend = context->backend;
+        session_options.options = context->session_options;
+        auto session = context->model->create_task_session(spec, session_options);
+        auto * offline = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(session.get());
+        if (offline == nullptr) throw std::runtime_error("task does not support offline execution");
+        engine::runtime::TaskRequest request;
+        request.audio_input = engine::runtime::AudioBuffer{};
+        request.audio_input->sample_rate = audio_sample_rate;
+        request.audio_input->channels = audio_channels;
+        request.audio_input->samples.assign(audio_samples, audio_samples + audio_count);
+        parse_options(options_json, request.options);
+        session->prepare(engine::runtime::build_preparation_request(request));
+        const auto result = offline->run(request);
+        if (!result.text_output.has_value()) throw std::runtime_error("model returned no transcription");
+        *out_text = copy_string(result.text_output->text);
+        return AUDIOCPP_OK;
+    } catch (const std::invalid_argument & exception) {
+        set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
+    } catch (const std::exception & exception) {
+        set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED;
+    } catch (...) {
+        set_error(err, errlen, "unknown transcription failure"); return AUDIOCPP_ERR_INFERENCE_FAILED;
     }
 }
 

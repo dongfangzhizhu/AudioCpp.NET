@@ -12,6 +12,24 @@ internal static class ConsoleApp
             return 0;
         }
 
+        if (args[0] is "asr" or "tts" or "verify")
+        {
+            var inferenceNativePath = Option(args, "--native");
+            try
+            {
+                using var runtime = AudioCppRuntime.Create(new AudioCppRuntimeOptions { NativeLibraryPath = inferenceNativePath });
+                return args[0] switch
+                {
+                    "asr" => RunAsr(runtime, args),
+                    "tts" => RunTts(runtime, args),
+                    "verify" => await VerifyAsync(runtime, args),
+                    _ => 1
+                };
+            }
+            catch (AudioCppException exception) { return Fail(exception.Message); }
+            catch (DllNotFoundException exception) { return Fail($"Native shim not found: {exception.Message}"); }
+        }
+
         if (args[0] != "models")
             return Fail("Unknown command. Use 'models help'.");
 
@@ -90,6 +108,71 @@ internal static class ConsoleApp
         return 0;
     }
 
+    private static int RunAsr(AudioCppRuntime runtime, string[] args)
+    {
+        var input = Option(args, "--input");
+        if (string.IsNullOrWhiteSpace(input)) return Fail("Usage: asr --input AUDIO.wav [--models-dir PATH] [--model PATH]");
+        var modelPath = Option(args, "--model") ?? Path.Combine(Option(args, "--models-dir") ?? ModelDirectory.Default,
+            "Citrinet-ASR-GGUF");
+        using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = "citrinet_asr" });
+        var audio = WaveFile.Read(input);
+        var text = model.Transcribe(new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels });
+        Console.WriteLine(text);
+        return 0;
+    }
+
+    private static int RunTts(AudioCppRuntime runtime, string[] args)
+    {
+        var text = Option(args, "--text");
+        var output = Option(args, "--output");
+        if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(output))
+            return Fail("Usage: tts --text TEXT --output AUDIO.wav [--models-dir PATH] [--model PATH]");
+        var modelPath = Option(args, "--model") ?? Path.Combine(Option(args, "--models-dir") ?? ModelDirectory.Default,
+            "Qwen3-TTS-12Hz-0.6B-Base-GGUF");
+        using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = "qwen3_tts" });
+        var audio = model.Synthesize(new TtsRequest { Text = text });
+        WaveFile.Write(output, audio);
+        Console.WriteLine($"Generated {output} ({audio.SampleRate} Hz, {audio.Channels} channel(s))");
+        return 0;
+    }
+
+    private static async Task<int> VerifyAsync(AudioCppRuntime runtime, string[] args)
+    {
+        var models = Option(args, "--models-dir") ?? ModelDirectory.Default;
+        var asrPackage = Option(args, "--asr-package") ?? "citrinet_asr_q8_0";
+        var ttsPackage = Option(args, "--tts-package") ?? "qwen3_tts_0_6b_base_q8_0";
+        Directory.CreateDirectory(models);
+        foreach (var package in new[] { asrPackage, ttsPackage })
+        {
+            Console.WriteLine($"Ensuring {package} is installed...");
+            Console.WriteLine(runtime.InstallPackage(package, models, false, Progress));
+        }
+        var input = Option(args, "--input");
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            input = Path.Combine(models, "verification-silence.wav");
+            WaveFile.Write(input, new AudioBuffer(new float[16000], 16000, 1));
+        }
+        var output = Option(args, "--output") ?? Path.Combine(models, "verification-tts.wav");
+        var asrPath = Path.Combine(models, "Citrinet-ASR-GGUF");
+        var ttsPath = Path.Combine(models, "Qwen3-TTS-12Hz-0.6B-Base-GGUF");
+        using var asr = runtime.LoadModel(new AudioCppModelOptions { ModelPath = asrPath, FamilyHint = "citrinet_asr" });
+        var inputAudio = WaveFile.Read(input);
+        Console.WriteLine($"ASR: {asr.Transcribe(new AsrRequest { Audio = inputAudio.Samples, SampleRate = inputAudio.SampleRate, Channels = inputAudio.Channels })}");
+        using var tts = runtime.LoadModel(new AudioCppModelOptions { ModelPath = ttsPath, FamilyHint = "qwen3_tts" });
+        var generated = tts.Synthesize(new TtsRequest { Text = "audio cpp verification" });
+        WaveFile.Write(output, generated);
+        Console.WriteLine($"TTS: {output} ({generated.Samples.Length} samples)");
+        await Task.CompletedTask;
+        return 0;
+    }
+
+    private static void Progress(ulong downloaded, ulong total, string? message)
+    {
+        var suffix = total == 0 ? $"{downloaded} bytes" : $"{downloaded}/{total} bytes";
+        Console.Error.WriteLine($"{suffix}{(string.IsNullOrWhiteSpace(message) ? "" : $" {message}")}");
+    }
+
     private static string? Option(string[] args, string name)
     {
         var index = Array.IndexOf(args, name);
@@ -108,12 +191,51 @@ Usage:
   audiocpp-net models packages [--native PATH]                  List downloadable model packages
   audiocpp-net models path [--models-dir PATH]                  Show the local model directory
   audiocpp-net models download PACKAGE_ID [options]              Download one package
+  audiocpp-net asr --input AUDIO.wav [options]                    Transcribe a PCM WAV file
+  audiocpp-net tts --text TEXT --output AUDIO.wav [options]       Synthesize speech
+  audiocpp-net verify [options]                                   Download minimal ASR/TTS and run both
 
 Options:
   --native PATH       Native audiocpp_dotnet library path (or AUDIOCPP_NATIVE_PATH)
   --models-dir PATH   Installation directory; defaults to the platform data directory
   --overwrite         Replace an existing package
 """);
+}
+
+internal static class WaveFile
+{
+    internal static AudioBuffer Read(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = new BinaryReader(stream);
+        if (new string(reader.ReadChars(4)) != "RIFF") throw new InvalidDataException("WAV must use RIFF format.");
+        reader.ReadInt32();
+        if (new string(reader.ReadChars(4)) != "WAVE") throw new InvalidDataException("Not a WAVE file.");
+        short format = 0, channels = 0, bits = 0; int sampleRate = 0; byte[]? data = null;
+        while (stream.Position + 8 <= stream.Length)
+        {
+            var id = new string(reader.ReadChars(4)); var size = reader.ReadInt32();
+            if (size < 0 || stream.Position + size > stream.Length) throw new InvalidDataException("Invalid WAV chunk.");
+            if (id == "fmt ") { format = reader.ReadInt16(); channels = reader.ReadInt16(); sampleRate = reader.ReadInt32(); reader.ReadInt32(); reader.ReadInt16(); bits = reader.ReadInt16(); }
+            else if (id == "data") data = reader.ReadBytes(size); else stream.Position += size;
+            if ((size & 1) != 0 && stream.Position < stream.Length) stream.Position++;
+        }
+        if (format != 1 || bits != 16 || channels <= 0 || sampleRate <= 0 || data is null) throw new InvalidDataException("Only PCM16 WAV files are supported.");
+        var samples = new float[data.Length / 2]; for (var i = 0; i < samples.Length; i++) samples[i] = BitConverter.ToInt16(data, i * 2) / 32768f;
+        return new AudioBuffer(samples, sampleRate, channels);
+    }
+
+    internal static void Write(string path, AudioBuffer audio)
+    {
+        if (audio.Channels <= 0 || audio.SampleRate <= 0) throw new ArgumentException("Invalid audio format.");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        using var stream = File.Create(path); using var writer = new BinaryWriter(stream);
+        var dataSize = audio.Samples.Length * 2; writer.Write("RIFF"u8.ToArray()); writer.Write(36 + dataSize); writer.Write("WAVE"u8.ToArray());
+        writer.Write("fmt "u8.ToArray()); writer.Write(16); writer.Write((short)1); writer.Write((short)audio.Channels); writer.Write(audio.SampleRate);
+        writer.Write(audio.SampleRate * audio.Channels * 2); writer.Write((short)(audio.Channels * 2)); writer.Write((short)16);
+        writer.Write("data"u8.ToArray()); writer.Write(dataSize);
+        foreach (var sample in audio.Samples.Span) writer.Write((short)Math.Clamp(sample * 32767f, short.MinValue, short.MaxValue));
+    }
 }
 
 internal static class ModelDirectory

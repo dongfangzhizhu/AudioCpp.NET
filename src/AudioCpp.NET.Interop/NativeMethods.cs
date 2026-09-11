@@ -64,6 +64,11 @@ internal static partial class NativeMethods
         IntPtr error,
         nuint errorLength);
 
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_model_transcribe", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int ModelTranscribe(
+        SafeModelHandle model, float* audioSamples, int audioCount, int audioSampleRate, int audioChannels,
+        string? optionsJson, out IntPtr outputText, IntPtr error, nuint errorLength);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_buffer_free")]
     internal static partial void BufferFree(IntPtr buffer);
 
