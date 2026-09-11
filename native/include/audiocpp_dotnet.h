@@ -23,6 +23,7 @@ typedef enum audiocpp_status {
     AUDIOCPP_ERR_LOAD_FAILED = 2,
     AUDIOCPP_ERR_INFERENCE_FAILED = 3,
     AUDIOCPP_ERR_UNSUPPORTED = 4,
+    AUDIOCPP_ERR_DOWNLOAD_FAILED = 5,
 } audiocpp_status;
 
 typedef struct audiocpp_abi_info {
@@ -36,6 +37,8 @@ typedef struct audiocpp_abi_info {
 } audiocpp_abi_info;
 
 typedef struct audiocpp_model audiocpp_model;
+typedef void (*audiocpp_download_progress_callback)(
+    uint64_t downloaded_bytes, uint64_t total_bytes, const char * message, void * user_data);
 
 AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * err, size_t errlen);
 AUDIOCPP_API audiocpp_model * audiocpp_model_load(
@@ -60,6 +63,18 @@ AUDIOCPP_API int32_t audiocpp_model_synthesize(
     int32_t * out_count,
     int32_t * out_sample_rate,
     int32_t * out_channels,
+    char * err,
+    size_t errlen);
+AUDIOCPP_API int32_t audiocpp_get_loader_catalog(char ** out_json, char * err, size_t errlen);
+AUDIOCPP_API int32_t audiocpp_get_package_catalog(char ** out_json, char * err, size_t errlen);
+AUDIOCPP_API int32_t audiocpp_install_package(
+    const char * package_id,
+    const char * repository_root,
+    const char * models_root,
+    int32_t overwrite,
+    audiocpp_download_progress_callback progress,
+    void * progress_user_data,
+    char ** out_message,
     char * err,
     size_t errlen);
 AUDIOCPP_API void audiocpp_buffer_free(void * buffer);

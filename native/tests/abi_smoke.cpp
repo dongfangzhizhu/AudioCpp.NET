@@ -12,9 +12,13 @@ int main() {
         std::cerr << "ABI query failed: " << error << '\n';
         return 1;
     }
-    if (info.abi_major != 1 || info.abi_minor != 0) return 2;
+    if (info.abi_major != 1 || info.abi_minor != 1) return 2;
     if (std::strcmp(info.audio_cpp_commit, "78d47706c30ef215ba9ad3559baff309efeb5260") != 0) return 3;
     if (info.shim_version == nullptr || info.backend == nullptr) return 4;
+    char * catalog = nullptr;
+    if (audiocpp_get_loader_catalog(&catalog, error, sizeof(error)) != AUDIOCPP_OK || catalog == nullptr) return 5;
+    if (std::strstr(catalog, "qwen3_tts") == nullptr) return 6;
+    audiocpp_buffer_free(catalog);
     std::cout << info.shim_version << "\naudio.cpp " << info.audio_cpp_commit << "\nbackend " << info.backend << '\n';
     return 0;
 }

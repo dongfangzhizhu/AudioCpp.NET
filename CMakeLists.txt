@@ -5,6 +5,7 @@ set(AUDIOCPP_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../audio.cpp" CACHE PATH "Pinned a
 set(AUDIOCPP_BACKEND "cpu" CACHE STRING "cpu|cuda|vulkan|hip|metal")
 set(AUDIOCPP_MODEL_SET "custom" CACHE STRING "audio.cpp model set")
 set(AUDIOCPP_MODELS "qwen3_tts" CACHE STRING "Models for the custom model set")
+option(AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER "Enable native model catalog and downloader" OFF)
 set(AUDIOCPP_PINNED_COMMIT "78d47706c30ef215ba9ad3559baff309efeb5260")
 
 execute_process(
@@ -36,6 +37,7 @@ set(ENGINE_ENABLE_METAL OFF CACHE BOOL "" FORCE)
 set(ENGINE_ENABLE_OPENMP OFF CACHE BOOL "" FORCE)
 set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 set(ENGINE_ENABLE_NATIVE_CPU OFF CACHE BOOL "" FORCE)
+set(AUDIOCPP_BUILD_NATIVE_MODEL_MANAGER "${AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER}" CACHE BOOL "" FORCE)
 
 if(MSVC)
   # audio.cpp contains UTF-8 source text. Do not let the host ACP (for example
@@ -63,6 +65,10 @@ target_compile_definitions(audiocpp_dotnet_native PRIVATE
   AUDIOCPP_DOTNET_BACKEND="${AUDIOCPP_BACKEND}")
 target_include_directories(audiocpp_dotnet_native PRIVATE native/include "${AUDIOCPP_SRC}/include")
 target_link_libraries(audiocpp_dotnet_native PRIVATE engine_runtime)
+if(AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER)
+  target_link_libraries(audiocpp_dotnet_native PRIVATE audiocpp_package_manager)
+  target_compile_definitions(audiocpp_dotnet_native PRIVATE AUDIOCPP_DOTNET_HAS_MODEL_MANAGER=1)
+endif()
 set_target_properties(audiocpp_dotnet_native PROPERTIES OUTPUT_NAME audiocpp_dotnet_native)
 
 add_executable(audiocpp_dotnet_abi_smoke native/tests/abi_smoke.cpp)

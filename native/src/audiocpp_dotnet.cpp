@@ -4,6 +4,9 @@
 #include "engine/framework/core/module.h"
 #include "engine/framework/runtime/registry.h"
 #include "engine/framework/runtime/session.h"
+#if defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
+#include "engine/framework/package_manager/manager.h"
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +16,9 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <atomic>
+#include <functional>
+#include <sstream>
 
 namespace {
 constexpr const char * kCommit = "78d47706c30ef215ba9ad3559baff309efeb5260";
@@ -26,6 +32,71 @@ void set_error(char * buffer, size_t length, const char * message) noexcept {
     if (buffer != nullptr && length != 0) {
         std::snprintf(buffer, length, "%s", message != nullptr ? message : "unknown error");
     }
+}
+
+std::string json_escape(const std::string & value) {
+    std::string result;
+    result.reserve(value.size() + 2);
+    for (const unsigned char ch : value) {
+        switch (ch) {
+        case '\\': result += "\\\\"; break;
+        case '"': result += "\\\""; break;
+        case '\n': result += "\\n"; break;
+        case '\r': result += "\\r"; break;
+        case '\t': result += "\\t"; break;
+        default:
+            if (ch < 0x20) {
+                char buffer[7] = {};
+                std::snprintf(buffer, sizeof(buffer), "\\u%04x", ch);
+                result += buffer;
+            } else result.push_back(static_cast<char>(ch));
+        }
+    }
+    return result;
+}
+
+char * copy_string(const std::string & value) {
+    auto * result = static_cast<char *>(std::malloc(value.size() + 1));
+    if (result == nullptr) throw std::bad_alloc();
+    std::memcpy(result, value.c_str(), value.size() + 1);
+    return result;
+}
+
+std::string loader_catalog_json() {
+    const auto rows = engine::runtime::make_default_registry().advertise_loaders();
+    std::ostringstream output;
+    output << "{\"schema_version\":1,\"loaders\":[";
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (i != 0) output << ',';
+        const auto & row = rows[i];
+        output << "{\"family\":\"" << json_escape(row.family) << "\",\"instructions_policy\":\""
+               << json_escape(row.instructions_policy) << "\",\"api_endpoints\":[";
+        for (size_t e = 0; e < row.api_endpoints.size(); ++e) {
+            if (e != 0) output << ',';
+            output << "\"" << json_escape(row.api_endpoints[e]) << "\"";
+        }
+        output << "],\"tasks\":[";
+        for (size_t t = 0; t < row.capabilities.supported_tasks.size(); ++t) {
+            if (t != 0) output << ',';
+            const auto & task = row.capabilities.supported_tasks[t];
+            output << "{\"task\":\"" << json_escape(engine::runtime::to_string(task.task)) << "\",\"modes\":[";
+            for (size_t m = 0; m < task.modes.size(); ++m) {
+                if (m != 0) output << ',';
+                output << "\"" << json_escape(engine::runtime::to_string(task.modes[m])) << "\"";
+            }
+            output << "]}";
+        }
+        output << "],\"languages\":[";
+        for (size_t l = 0; l < row.capabilities.languages.size(); ++l) {
+            if (l != 0) output << ',';
+            output << "\"" << json_escape(row.capabilities.languages[l]) << "\"";
+        }
+        output << "],\"supports_speaker_reference\":" << (row.capabilities.supports_speaker_reference ? "true" : "false")
+               << ",\"supports_style_condition\":" << (row.capabilities.supports_style_condition ? "true" : "false")
+               << ",\"supports_timestamps\":" << (row.capabilities.supports_timestamps ? "true" : "false") << "}";
+    }
+    output << "]}";
+    return output.str();
 }
 
 engine::core::BackendType parse_backend(const char * value) {
@@ -87,12 +158,79 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
         return AUDIOCPP_ERR_BAD_ARG;
     }
     out_info->abi_major = 1;
-    out_info->abi_minor = 0;
-    out_info->shim_version = "audiocpp-dotnet-shim 0.1.0";
+    out_info->abi_minor = 1;
+    out_info->shim_version = "audiocpp-dotnet-shim 0.2.0";
     out_info->audio_cpp_commit = kCommit;
     out_info->backend = kBackend;
-    out_info->capabilities = kTts;
+    out_info->capabilities = kTts | (1ull << 1) | (1ull << 2);
     return AUDIOCPP_OK;
+}
+
+AUDIOCPP_API int32_t audiocpp_get_loader_catalog(char ** out_json, char * err, size_t errlen) {
+    if (out_json == nullptr) {
+        set_error(err, errlen, "out_json is null");
+        return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_json = nullptr;
+    try {
+        *out_json = copy_string(loader_catalog_json());
+        return AUDIOCPP_OK;
+    } catch (const std::exception & exception) {
+        set_error(err, errlen, exception.what());
+        return AUDIOCPP_ERR_INFERENCE_FAILED;
+    }
+}
+
+AUDIOCPP_API int32_t audiocpp_get_package_catalog(char ** out_json, char * err, size_t errlen) {
+    if (out_json == nullptr) {
+        set_error(err, errlen, "out_json is null");
+        return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_json = nullptr;
+#if !defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
+    set_error(err, errlen, "model manager is not enabled in this native build; configure with AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON");
+    return AUDIOCPP_ERR_UNSUPPORTED;
+#else
+    try {
+        engine::package_manager::PackageManager manager(".", ".");
+        *out_json = copy_string(manager.inventory(false));
+        return AUDIOCPP_OK;
+    } catch (const std::exception & exception) {
+        set_error(err, errlen, exception.what());
+        return AUDIOCPP_ERR_DOWNLOAD_FAILED;
+    }
+#endif
+}
+
+AUDIOCPP_API int32_t audiocpp_install_package(
+    const char * package_id, const char * repository_root, const char * models_root, int32_t overwrite,
+    audiocpp_download_progress_callback progress, void * progress_user_data,
+    char ** out_message, char * err, size_t errlen) {
+    if (package_id == nullptr || *package_id == '\0' || out_message == nullptr) {
+        set_error(err, errlen, "package_id and out_message are required");
+        return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_message = nullptr;
+#if !defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
+    set_error(err, errlen, "model manager is not enabled in this native build; configure with AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON");
+    return AUDIOCPP_ERR_UNSUPPORTED;
+#else
+    try {
+        engine::package_manager::PackageManager manager(
+            repository_root != nullptr && *repository_root != '\0' ? repository_root : ".",
+            models_root != nullptr && *models_root != '\0' ? models_root : "models");
+        auto cancelled = std::make_shared<std::atomic_bool>(false);
+        const auto message = manager.install(package_id, overwrite != 0, cancelled,
+            [progress, progress_user_data](const engine::package_manager::PackageProgress & item) {
+                if (progress != nullptr) progress(item.downloaded_bytes, item.total_bytes, item.message.c_str(), progress_user_data);
+            });
+        *out_message = copy_string(message);
+        return AUDIOCPP_OK;
+    } catch (const std::exception & exception) {
+        set_error(err, errlen, exception.what());
+        return AUDIOCPP_ERR_DOWNLOAD_FAILED;
+    }
+#endif
 }
 
 AUDIOCPP_API audiocpp_model * audiocpp_model_load(const char * model_path, const char * family_hint,

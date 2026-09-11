@@ -5,3 +5,6 @@ EXPORTS
   audiocpp_model_free
   audiocpp_model_load
   audiocpp_model_synthesize
+  audiocpp_get_loader_catalog
+  audiocpp_get_package_catalog
+  audiocpp_install_package
