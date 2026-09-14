@@ -87,6 +87,23 @@ cmake --build build/native --config Release --target audiocpp_dotnet_native --pa
 
 The native build is intentionally separate from normal managed unit tests. End-to-end inference additionally requires a compatible model.
 
+## Troubleshooting
+
+### `DllNotFoundException: Unable to load audiocpp_dotnet_native`
+
+The native shim is a CMake artifact; `dotnet build` never copies it. The
+loader resolves it in this order and stops at the first hit:
+
+1. Explicit path: the Web UI *Native shim* field, the CLI `--native` option,
+   or `AudioCppRuntimeOptions.NativeLibraryPath`
+2. The `AUDIOCPP_NATIVE_PATH` environment variable
+3. The bare library name in the application output directory or `PATH`
+4. Repository auto-discovery: walking up from the application directory it
+   probes `<root>/build/native*/Release|Debug` and `runtimes/<rid>/native`
+
+When nothing matches, the exception lists every probed path. Build the shim
+with the command above or point `AUDIOCPP_NATIVE_PATH` at an existing build.
+
 ## Evaluate an upstream update
 
 Fetch the candidate commit in the local `audio.cpp` checkout, then run:

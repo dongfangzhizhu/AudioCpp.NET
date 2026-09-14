@@ -1,0 +1,12 @@
+{
+  "profiles": {
+    "AudioCpp.NET.Web": {
+      "commandName": "Project",
+      "launchBrowser": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development"
+      },
+      "applicationUrl": "https://localhost:62028;http://localhost:62029"
+    }
+  }
+}
