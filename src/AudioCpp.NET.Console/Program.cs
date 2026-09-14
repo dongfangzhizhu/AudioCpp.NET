@@ -6,7 +6,10 @@ internal static class ConsoleApp
 {
     internal static async Task<int> RunAsync(string[] args)
     {
-        if (args.Length == 0 || args[0] is "help" or "--help" or "-h")
+        if (args.Length == 0)
+            return await InteractiveMenu.RunAsync();
+
+        if (args[0] is "help" or "--help" or "-h")
         {
             PrintHelp();
             return 0;
@@ -128,11 +131,23 @@ internal static class ConsoleApp
         var text = Option(args, "--text");
         var output = Option(args, "--output");
         if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(output))
-            return Fail("Usage: tts --text TEXT --output AUDIO.wav [--models-dir PATH] [--model PATH]");
+            return Fail("Usage: tts --text TEXT --output AUDIO.wav [--voice-ref AUDIO.wav] [--models-dir PATH] [--model PATH]");
         var modelPath = Option(args, "--model") ?? Path.Combine(Option(args, "--models-dir") ?? ModelDirectory.Default,
             "Qwen3-TTS-12Hz-0.6B-Base-GGUF");
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = "qwen3_tts" });
-        var audio = model.Synthesize(new TtsRequest { Text = text });
+        var voiceRef = Option(args, "--voice-ref");
+        var reference = voiceRef is null ? null : WaveFile.Read(voiceRef);
+        var referenceText = Option(args, "--reference-text");
+        var audio = model.Synthesize(new TtsRequest
+        {
+            Text = text,
+            Task = "tts",
+            ReferencePcm = reference?.Samples ?? ReadOnlyMemory<float>.Empty,
+            ReferenceSampleRate = reference?.SampleRate ?? 0,
+            Options = reference is null || referenceText is null
+                ? null
+                : new Dictionary<string, string> { ["reference_text"] = referenceText }
+        });
         WaveFile.Write(output, audio);
         Console.WriteLine($"Generated {output} ({audio.SampleRate} Hz, {audio.Channels} channel(s))");
         return 0;
@@ -155,6 +170,15 @@ internal static class ConsoleApp
             input = Path.Combine(models, "verification-silence.wav");
             WaveFile.Write(input, new AudioBuffer(new float[16000], 16000, 1));
         }
+        var voiceRefPath = Option(args, "--voice-ref");
+        if (string.IsNullOrWhiteSpace(voiceRefPath))
+        {
+            voiceRefPath = Path.Combine(models, "verification-voice-ref.wav");
+            var referenceSamples = Enumerable.Range(0, 48000)
+                .Select(index => 0.08f * MathF.Sin(2 * MathF.PI * 220 * index / 16000f))
+                .ToArray();
+            WaveFile.Write(voiceRefPath, new AudioBuffer(referenceSamples, 16000, 1));
+        }
         var output = Option(args, "--output") ?? Path.Combine(models, "verification-tts.wav");
         var asrPath = Path.Combine(models, "Citrinet-ASR-GGUF");
         var ttsPath = Path.Combine(models, "Qwen3-TTS-12Hz-0.6B-Base-GGUF");
@@ -162,7 +186,15 @@ internal static class ConsoleApp
         var inputAudio = WaveFile.Read(input);
         Console.WriteLine($"ASR: {asr.Transcribe(new AsrRequest { Audio = inputAudio.Samples, SampleRate = inputAudio.SampleRate, Channels = inputAudio.Channels })}");
         using var tts = runtime.LoadModel(new AudioCppModelOptions { ModelPath = ttsPath, FamilyHint = "qwen3_tts" });
-        var generated = tts.Synthesize(new TtsRequest { Text = "audio cpp verification" });
+        var reference = WaveFile.Read(voiceRefPath);
+        var generated = tts.Synthesize(new TtsRequest
+        {
+            Text = "audio cpp verification",
+            Task = "tts",
+            ReferencePcm = reference.Samples,
+            ReferenceSampleRate = reference.SampleRate,
+            Options = new Dictionary<string, string> { ["reference_text"] = "audio cpp reference" }
+        });
         WaveFile.Write(output, generated);
         Console.WriteLine($"TTS: {output} ({generated.Samples.Length} samples)");
         await Task.CompletedTask;
@@ -213,64 +245,15 @@ Usage:
   audiocpp-net models path [--models-dir PATH]                  Show the local model directory
   audiocpp-net models download PACKAGE_ID [options]              Download one package
   audiocpp-net asr --input AUDIO.wav [options]                    Transcribe a PCM WAV file
-  audiocpp-net tts --text TEXT --output AUDIO.wav [options]       Synthesize speech
+  audiocpp-net tts --text TEXT --output AUDIO.wav [--voice-ref WAV] [--reference-text TEXT] Synthesize speech
   audiocpp-net verify [options]                                   Download minimal ASR/TTS and run both
 
 Options:
   --native PATH       Native audiocpp_dotnet library path (or AUDIOCPP_NATIVE_PATH)
   --models-dir PATH   Installation directory; defaults to the platform data directory
   --hf-endpoint URL   Hugging Face mirror base URL (or HF_ENDPOINT)
+  --voice-ref WAV     Reference speaker audio for voice-clone TTS
+  --reference-text TEXT  Transcript of the reference audio
   --overwrite         Replace an existing package
 """);
-}
-
-internal static class WaveFile
-{
-    internal static AudioBuffer Read(string path)
-    {
-        using var stream = File.OpenRead(path);
-        using var reader = new BinaryReader(stream);
-        if (new string(reader.ReadChars(4)) != "RIFF") throw new InvalidDataException("WAV must use RIFF format.");
-        reader.ReadInt32();
-        if (new string(reader.ReadChars(4)) != "WAVE") throw new InvalidDataException("Not a WAVE file.");
-        short format = 0, channels = 0, bits = 0; int sampleRate = 0; byte[]? data = null;
-        while (stream.Position + 8 <= stream.Length)
-        {
-            var id = new string(reader.ReadChars(4)); var size = reader.ReadInt32();
-            if (size < 0 || stream.Position + size > stream.Length) throw new InvalidDataException("Invalid WAV chunk.");
-            if (id == "fmt ") { format = reader.ReadInt16(); channels = reader.ReadInt16(); sampleRate = reader.ReadInt32(); reader.ReadInt32(); reader.ReadInt16(); bits = reader.ReadInt16(); }
-            else if (id == "data") data = reader.ReadBytes(size); else stream.Position += size;
-            if ((size & 1) != 0 && stream.Position < stream.Length) stream.Position++;
-        }
-        if (format != 1 || bits != 16 || channels <= 0 || sampleRate <= 0 || data is null) throw new InvalidDataException("Only PCM16 WAV files are supported.");
-        var samples = new float[data.Length / 2]; for (var i = 0; i < samples.Length; i++) samples[i] = BitConverter.ToInt16(data, i * 2) / 32768f;
-        return new AudioBuffer(samples, sampleRate, channels);
-    }
-
-    internal static void Write(string path, AudioBuffer audio)
-    {
-        if (audio.Channels <= 0 || audio.SampleRate <= 0) throw new ArgumentException("Invalid audio format.");
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        using var stream = File.Create(path); using var writer = new BinaryWriter(stream);
-        var dataSize = audio.Samples.Length * 2; writer.Write("RIFF"u8.ToArray()); writer.Write(36 + dataSize); writer.Write("WAVE"u8.ToArray());
-        writer.Write("fmt "u8.ToArray()); writer.Write(16); writer.Write((short)1); writer.Write((short)audio.Channels); writer.Write(audio.SampleRate);
-        writer.Write(audio.SampleRate * audio.Channels * 2); writer.Write((short)(audio.Channels * 2)); writer.Write((short)16);
-        writer.Write("data"u8.ToArray()); writer.Write(dataSize);
-        foreach (var sample in audio.Samples.Span) writer.Write((short)Math.Clamp(sample * 32767f, short.MinValue, short.MaxValue));
-    }
-}
-
-internal static class ModelDirectory
-{
-    internal static string Default
-    {
-        get
-        {
-            var root = OperatingSystem.IsWindows()
-                ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
-                : Environment.GetEnvironmentVariable("XDG_DATA_HOME") ??
-                  Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share");
-            return Path.Combine(root, "audiocpp.net", "models");
-        }
-    }
 }

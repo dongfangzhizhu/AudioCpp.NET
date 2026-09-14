@@ -47,6 +47,35 @@ The default native build supports `models list`. Build with
 `models download`; that option requires the upstream package manager's TLS
 dependency (system OpenSSL or the pinned BoringSSL archive).
 
+## Interactive console
+
+Run the console without arguments to open an interactive menu that walks
+through package status, model download, ASR, TTS voice-clone, end-to-end
+verification, and Hugging Face mirror settings step by step:
+
+```powershell
+dotnet run --project src/AudioCpp.NET.Console
+```
+
+Scripted subcommands are unchanged and `help` still prints the command
+reference.
+
+## Web workbench
+
+A local Gradio-style test UI: browse and install model packages, pick a
+detected local model, run ASR on an uploaded WAV, and synthesize voice-clone
+TTS with inline playback and download. Managed requests are serialized
+because the native runtime is not thread-safe; generated audio is served
+only from the build artifacts directory and TLS verification stays on.
+
+```powershell
+# Optional pre-configuration; every field stays editable in the UI
+$env:AUDIOCPP_NATIVE_PATH = ".\build\native-verify\Release\audiocpp_dotnet_native.dll"
+$env:AUDIOCPP_MODELS_DIR  = ".\models"
+$env:HF_ENDPOINT          = "https://hf-mirror.com"
+dotnet run --project src/AudioCpp.NET.Web --urls http://127.0.0.1:5099
+```
+
 ## Build native shim
 
 Use the pinned checkout already present beside this repository:

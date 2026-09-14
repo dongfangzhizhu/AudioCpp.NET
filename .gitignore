@@ -10,3 +10,6 @@ upstream/
 *.nupkg
 *.snupkg
 upstream-*-report.md
+
+# Downloaded model packages and verification artifacts stay local
+/models/
