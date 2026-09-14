@@ -62,7 +62,7 @@ internal static class InteropOperations
         finally { if (result != IntPtr.Zero) NativeMethods.BufferFree(result); }
     }
 
-    private static string Utf8(byte* value) => value is null ? string.Empty : Marshal.PtrToStringUTF8((IntPtr)value) ?? string.Empty;
+    private static unsafe string Utf8(byte* value) => value is null ? string.Empty : Marshal.PtrToStringUTF8((IntPtr)value) ?? string.Empty;
 
     internal static unsafe (SafeModelHandle Handle, string Error) LoadModel(
         string modelPath, string? familyHint, string? backend, int device, int threads, string? options)

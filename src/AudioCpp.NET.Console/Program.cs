@@ -14,6 +14,7 @@ internal static class ConsoleApp
 
         if (args[0] is "asr" or "tts" or "verify")
         {
+            if (!ConfigureHuggingFaceEndpoint(args)) return 1;
             var inferenceNativePath = Option(args, "--native");
             try
             {
@@ -45,6 +46,7 @@ internal static class ConsoleApp
         var nativePath = Option(args, "--native");
         try
         {
+            if (!ConfigureHuggingFaceEndpoint(args)) return 1;
             using var runtime = AudioCppRuntime.Create(new AudioCppRuntimeOptions { NativeLibraryPath = nativePath });
             return args.ElementAtOrDefault(1) switch
             {
@@ -180,6 +182,25 @@ internal static class ConsoleApp
     }
 
     private static bool HasFlag(string[] args, string name) => args.Contains(name, StringComparer.Ordinal);
+
+    private static bool ConfigureHuggingFaceEndpoint(string[] args)
+    {
+        var endpoint = Option(args, "--hf-endpoint");
+        if (endpoint is null) return true;
+        endpoint = endpoint.Trim().TrimEnd('/');
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) ||
+            string.IsNullOrWhiteSpace(uri.Host) || !string.IsNullOrEmpty(uri.Query) ||
+            !string.IsNullOrEmpty(uri.Fragment) || !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            Fail("--hf-endpoint must be an absolute HTTP(S) URL without query, fragment, or credentials.");
+            return false;
+        }
+
+        Environment.SetEnvironmentVariable("AUDIOCPP_HF_BASE_URL", endpoint);
+        return true;
+    }
+
     private static int HelpAndSuccess() { PrintHelp(); return 0; }
     private static int Fail(string message) { Console.Error.WriteLine($"error: {message}"); return 1; }
 
@@ -198,6 +219,7 @@ Usage:
 Options:
   --native PATH       Native audiocpp_dotnet library path (or AUDIOCPP_NATIVE_PATH)
   --models-dir PATH   Installation directory; defaults to the platform data directory
+  --hf-endpoint URL   Hugging Face mirror base URL (or HF_ENDPOINT)
   --overwrite         Replace an existing package
 """);
 }

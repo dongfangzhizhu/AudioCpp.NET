@@ -28,7 +28,19 @@ shim and can install a package through audio.cpp's native model manager:
 dotnet run --project src/AudioCpp.NET.Console -- models list --native .\build\native-default\Release\audiocpp_dotnet_native.dll
 dotnet run --project src/AudioCpp.NET.Console -- models path
 dotnet run --project src/AudioCpp.NET.Console -- models download qwen3_tts_1_7b_base_q8_0 --models-dir .\models
+# Use a Hugging Face mirror for faster downloads
+dotnet run --project src/AudioCpp.NET.Console -- models download citrinet_asr_q8_0 `
+  --models-dir .\models --hf-endpoint https://hf-mirror.com
 ```
+
+Hugging Face downloads support `--hf-endpoint URL` on `models download` and
+`verify`. The option takes precedence over `AUDIOCPP_HF_BASE_URL` and
+`HF_ENDPOINT`. For scripts, set `HF_ENDPOINT` (the native downloader also
+accepts this standard Hugging Face variable); `AUDIOCPP_HF_BASE_URL` remains
+the native-specific override and takes precedence over `HF_ENDPOINT` when the
+CLI option is not supplied. Endpoints must be absolute HTTP(S) URLs without
+credentials, query strings, or fragments. TLS certificate and host-name
+verification remain enabled.
 
 The default native build supports `models list`. Build with
 `-DAUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON` to enable `models packages` and
