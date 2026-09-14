@@ -19,6 +19,8 @@ app.MapGet("/api/packages", (AudioCppWorkbench workbench) => workbench.ListPacka
 app.MapGet("/api/models", (AudioCppWorkbench workbench) => workbench.ListModelDirectories());
 app.MapPost("/api/packages/download", (DownloadRequest request, AudioCppWorkbench workbench) =>
     workbench.DownloadAsync(request));
+app.MapPost("/api/verify", (VerifyRequest request, AudioCppWorkbench workbench) =>
+    workbench.VerifyModelAsync(request));
 app.MapPost("/api/asr", (HttpRequest request, AudioCppWorkbench workbench) => workbench.TranscribeAsync(request));
 app.MapPost("/api/tts", (HttpRequest request, AudioCppWorkbench workbench) => workbench.SynthesizeAsync(request));
 app.MapGet("/api/audio/{fileName}", (string fileName, AudioCppWorkbench workbench) => workbench.GetAudio(fileName));
@@ -26,7 +28,7 @@ app.MapGet("/api/audio/{fileName}", (string fileName, AudioCppWorkbench workbenc
 app.UseExceptionHandler(handler => handler.Run(async context =>
 {
     var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
-    context.Response.StatusCode = error is ArgumentException or InvalidDataException ? 400 : 500;
+    context.Response.StatusCode = error is ArgumentException or InvalidDataException or AudioCppModelIncompleteException ? 400 : 500;
     await context.Response.WriteAsJsonAsync(new { error = error?.Message ?? "Unknown server error." });
 }));
 
@@ -34,6 +36,7 @@ app.Run();
 
 internal sealed record WorkbenchConfiguration(string NativePath, string ModelsDirectory, string HuggingFaceEndpoint);
 internal sealed record DownloadRequest(string PackageId, bool Overwrite = false);
+internal sealed record VerifyRequest(string Path);
 
 internal sealed class AudioCppWorkbench
 {
@@ -72,14 +75,38 @@ internal sealed class AudioCppWorkbench
         foreach (var dir in Directory.EnumerateDirectories(_configuration.ModelsDirectory)
                      .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
         {
+            var report = ModelValidator.Validate(dir);
             result.Add(new
             {
                 name = Path.GetFileName(dir),
                 path = Path.GetFullPath(dir),
-                models = Directory.EnumerateFiles(dir, "*.gguf").Select(Path.GetFileName).ToArray()
+                models = Directory.EnumerateFiles(dir, "*.gguf").Select(Path.GetFileName).ToArray(),
+                packageId = report.PackageId,
+                manifest = report.ManifestPresent,
+                complete = report.Complete,
+                issues = ModelValidator.FormatIssues(report)
             });
         }
         return result;
+    }
+
+    internal object VerifyModelAsync(VerifyRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (string.IsNullOrWhiteSpace(request.Path)) throw new ArgumentException("Path is required.");
+        var full = Path.GetFullPath(request.Path);
+        if (!Directory.Exists(full)) throw new ArgumentException($"Model directory does not exist: {full}");
+        var report = ModelValidator.Validate(full);
+        return (object)new
+        {
+            path = report.Directory,
+            packageId = report.PackageId,
+            manifest = report.ManifestPresent,
+            complete = report.Complete,
+            checkedFiles = report.CheckedFiles,
+            checkedBytes = report.CheckedBytes,
+            issues = report.Issues.Select(issue => new { kind = issue.Kind, path = issue.Path, detail = issue.Detail }).ToArray()
+        };
     }
 
     internal async Task<object> DownloadAsync(DownloadRequest request) => await Locked(() =>
@@ -100,7 +127,7 @@ internal sealed class AudioCppWorkbench
         var form = await request.ReadFormAsync();
         var upload = form.Files.GetFile("audio") ?? throw new ArgumentException("A PCM16 WAV file is required.");
         var audio = ReadWave(upload);
-        var modelPath = Value(form, "modelPath", Path.Combine(_configuration.ModelsDirectory, "Citrinet-ASR-GGUF"));
+        var modelPath = Value(form, "modelPath", ResolveModelPath("citrinet_asr", "Citrinet-ASR-GGUF"));
         var family = Value(form, "family", "citrinet_asr");
         var threads = Integer(form, "threads");
         using var runtime = CreateRuntime();
@@ -117,7 +144,7 @@ internal sealed class AudioCppWorkbench
         if (string.IsNullOrWhiteSpace(text)) throw new ArgumentException("Text is required.");
         var referenceFile = form.Files.GetFile("voiceRef");
         var reference = referenceFile is null ? null : ReadWave(referenceFile);
-        var modelPath = Value(form, "modelPath", Path.Combine(_configuration.ModelsDirectory, "Qwen3-TTS-12Hz-0.6B-Base-GGUF"));
+        var modelPath = Value(form, "modelPath", ResolveModelPath("qwen3_tts", "Qwen3-TTS-12Hz-0.6B-Base-GGUF"));
         var family = Value(form, "family", "qwen3_tts");
         var options = new Dictionary<string, string>(Options(form["options"]) ?? new Dictionary<string, string>());
         var referenceText = Value(form, "referenceText", "");
@@ -143,6 +170,18 @@ internal sealed class AudioCppWorkbench
 
     private AudioCppRuntime CreateRuntime() => AudioCppRuntime.Create(new AudioCppRuntimeOptions
         { NativeLibraryPath = string.IsNullOrWhiteSpace(_configuration.NativePath) ? null : _configuration.NativePath });
+    private string ResolveModelPath(string family, string standardDirectory)
+    {
+        var standard = Path.Combine(_configuration.ModelsDirectory, standardDirectory);
+        if (Directory.Exists(standard)) return standard;
+        foreach (var packageId in ModelValidator.FindPackageIds(_configuration.ModelsDirectory))
+        {
+            if (ModelValidator.DeriveFamily(packageId) != family) continue;
+            var found = ModelValidator.FindPackageDirectory(_configuration.ModelsDirectory, packageId);
+            if (found is not null) return found;
+        }
+        return standard;
+    }
     private void ConfigureEndpoint() => Environment.SetEnvironmentVariable("AUDIOCPP_HF_BASE_URL", _configuration.HuggingFaceEndpoint);
     private static AudioBuffer ReadWave(IFormFile file)
     {

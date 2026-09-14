@@ -71,10 +71,32 @@ public sealed class AudioCppRuntime : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(options);
-        var (handle, error) = InteropOperations.LoadModel(options.ModelPath, options.FamilyHint, BuildInfo.Backend,
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.ModelPath);
+        var modelPath = options.ModelPath;
+        if (!File.Exists(modelPath) && !Directory.Exists(modelPath))
+            throw new AudioCppLoadException($"Model path does not exist: {Path.GetFullPath(modelPath)}");
+
+        string? familyHint = string.IsNullOrWhiteSpace(options.FamilyHint) ? null : options.FamilyHint;
+        if (Directory.Exists(modelPath))
+        {
+            var report = ModelValidator.Validate(modelPath);
+            if (!report.Complete)
+                throw new AudioCppModelIncompleteException(
+                    $"Model at '{Path.GetFullPath(modelPath)}' is incomplete. {ModelValidator.FormatIssues(report)} " +
+                    "Re-download the package or restore the missing files.");
+            if (familyHint is null && report.PackageId is not null) familyHint = DeriveFamily(report.PackageId);
+        }
+
+        var (handle, error) = InteropOperations.LoadModel(modelPath, familyHint, BuildInfo.Backend,
             options.Device, options.Threads, ToJson(options.LoadOptions));
         if (handle.IsInvalid) { handle.Dispose(); throw new AudioCppLoadException(error); }
         return new AudioCppModel(handle);
+    }
+
+    private string? DeriveFamily(string packageId)
+    {
+        try { return ModelValidator.DeriveFamily(packageId, ListLoaders().Select(loader => loader.Family)); }
+        catch (Exception exception) when (exception is AudioCppException or DllNotFoundException) { return null; }
     }
 
     public IReadOnlyList<AudioCppLoader> ListLoaders()
@@ -94,14 +116,25 @@ public sealed class AudioCppRuntime : IDisposable
     }
 
     public string InstallPackage(string packageId, string modelsDirectory, bool overwrite = false,
-        Action<ulong, ulong, string?>? progress = null)
+        Action<ulong, ulong, string?>? progress = null, bool verify = true)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelsDirectory);
-        try { return InteropOperations.InstallPackage(packageId, ".", modelsDirectory, overwrite, progress); }
+        string message;
+        try { message = InteropOperations.InstallPackage(packageId, ".", modelsDirectory, overwrite, progress); }
         catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
         { throw new AudioCppException(exception.Message, exception); }
+        if (!verify) return message;
+
+        var directory = ModelValidator.FindPackageDirectory(modelsDirectory, packageId);
+        if (directory is null) return message;
+        var report = ModelValidator.Validate(directory);
+        if (!report.Complete)
+            throw new AudioCppModelIncompleteException(
+                $"Package '{packageId}' installed but incomplete at '{directory}'. {ModelValidator.FormatIssues(report)} " +
+                "Re-run the download with overwrite to repair it.");
+        return $"{message}{Environment.NewLine}verified {report.CheckedFiles} file(s), {report.CheckedBytes} bytes";
     }
 
     public void Dispose() => _disposed = true;
@@ -193,5 +226,6 @@ public sealed class AudioCppModel : IDisposable
 
 public class AudioCppException(string message, Exception? inner = null) : Exception(message, inner);
 public sealed class AudioCppAbiMismatchException(string message) : AudioCppException(message);
-public sealed class AudioCppLoadException(string message) : AudioCppException(message);
+public class AudioCppLoadException(string message) : AudioCppException(message);
+public sealed class AudioCppModelIncompleteException(string message) : AudioCppLoadException(message);
 public sealed class AudioCppInferenceException(string message, Exception? inner = null) : AudioCppException(message, inner);

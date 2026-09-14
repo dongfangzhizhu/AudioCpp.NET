@@ -211,6 +211,10 @@ textarea { resize: vertical; min-height: 64px; font-family: var(--body); }
 .model-list .mdl:hover { border-color: var(--amber); background: rgba(245, 165, 36, .06); }
 .model-list .mdl.selected { border-color: var(--amber); box-shadow: inset 0 0 0 1px rgba(245, 165, 36, .35); }
 .model-list .ggufs { font-size: 10.5px; color: var(--dim); }
+  .model-list .mdl-badge { font: 700 9.5px/1 var(--disp); letter-spacing: .06em; white-space: nowrap; }
+  .model-list .mdl-badge.ok { color: var(--teal); }
+  .model-list .mdl-badge.bad { color: var(--red); }
+  .model-list .mdl-badge.raw { color: var(--dim); }
 .package-list:empty::after, .model-list:empty::after { content: "— empty —"; color: #57503f; font: 11px var(--mono); display: block; padding: 6px 2px; }
 
 /* ── deck & tabs ── */

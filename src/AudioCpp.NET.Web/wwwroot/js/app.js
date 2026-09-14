@@ -154,7 +154,16 @@ async function loadModels() {
       const ggufs = document.createElement("span");
       ggufs.className = "ggufs";
       ggufs.textContent = (entry.models ?? []).length ? entry.models.join(" · ") : "no gguf";
-      item.append(name, ggufs);
+      const badge = document.createElement("span");
+      badge.className = entry.manifest === false ? "mdl-badge raw" : (entry.complete ? "mdl-badge ok" : "mdl-badge bad");
+      badge.textContent = entry.manifest === false ? "unmanaged" : (entry.complete ? "✓ complete" : "✗ incomplete");
+      badge.title = entry.issues || "package manifest verification";
+      const verify = document.createElement("button");
+      verify.className = "btn btn-mini";
+      verify.type = "button";
+      verify.textContent = "VERIFY";
+      verify.addEventListener("click", (event) => { event.stopPropagation(); verifyModel(entry.path, verify); });
+      item.append(name, ggufs, badge, verify);
       item.addEventListener("click", () => {
         const target = $("tabTts").checked ? "ttsModelPath" : "asrModelPath";
         $(target).value = entry.path;
@@ -169,6 +178,33 @@ async function loadModels() {
 }
 
 $("refreshModels").addEventListener("click", loadModels);
+
+/* ── per-model package verification ── */
+async function verifyModel(path, button) {
+  button.disabled = true;
+  try {
+    const report = await api("/api/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    const label = report.packageId || report.path;
+    if (report.complete) {
+      log("ok", `校验通过：${report.packageId || report.path} · ${report.checkedFiles} 文件 / ${report.checkedBytes} B`);
+    } else {
+      log("err", `校验失败：${report.packageId || report.path}`);
+      for (const issue of report.issues ?? []) {
+        log("err", `  ${issue.kind}: ${issue.path}${issue.detail ? `（${issue.detail}）` : ""}`);
+      }
+    }
+    await loadModels();
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    showError(`校验失败：${message}`);
+  } finally {
+    button.disabled = false;
+  }
+}
 
 /* ── tabs ── */
 function syncDecks() {

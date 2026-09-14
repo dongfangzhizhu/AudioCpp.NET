@@ -56,6 +56,7 @@ internal static class ConsoleApp
                 "list" => ListLoaders(runtime),
                 "packages" => ListPackages(runtime),
                 "download" => Download(runtime, args),
+                "verify" => VerifyPackages(args),
                 "help" or null => HelpAndSuccess(),
                 _ => Fail("Unknown models command. Use 'models help'.")
             };
@@ -117,8 +118,8 @@ internal static class ConsoleApp
     {
         var input = Option(args, "--input");
         if (string.IsNullOrWhiteSpace(input)) return Fail("Usage: asr --input AUDIO.wav [--models-dir PATH] [--model PATH]");
-        var modelPath = Option(args, "--model") ?? Path.Combine(Option(args, "--models-dir") ?? ModelDirectory.Default,
-            "Citrinet-ASR-GGUF");
+        var modelPath = Option(args, "--model") ??
+            ResolveModelPath(Option(args, "--models-dir") ?? ModelDirectory.Default, "Citrinet-ASR-GGUF", "citrinet_asr_q8_0");
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = "citrinet_asr" });
         var audio = WaveFile.Read(input);
         var text = model.Transcribe(new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels });
@@ -132,8 +133,8 @@ internal static class ConsoleApp
         var output = Option(args, "--output");
         if (string.IsNullOrWhiteSpace(text) || string.IsNullOrWhiteSpace(output))
             return Fail("Usage: tts --text TEXT --output AUDIO.wav [--voice-ref AUDIO.wav] [--models-dir PATH] [--model PATH]");
-        var modelPath = Option(args, "--model") ?? Path.Combine(Option(args, "--models-dir") ?? ModelDirectory.Default,
-            "Qwen3-TTS-12Hz-0.6B-Base-GGUF");
+        var modelPath = Option(args, "--model") ??
+            ResolveModelPath(Option(args, "--models-dir") ?? ModelDirectory.Default, "Qwen3-TTS-12Hz-0.6B-Base-GGUF", "qwen3_tts_0_6b_base_q8_0");
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = "qwen3_tts" });
         var voiceRef = Option(args, "--voice-ref");
         var reference = voiceRef is null ? null : WaveFile.Read(voiceRef);
@@ -201,6 +202,53 @@ internal static class ConsoleApp
         return 0;
     }
 
+    private static int VerifyPackages(string[] args)
+    {
+        var directory = Option(args, "--models-dir") ?? ModelDirectory.Default;
+        if (!Directory.Exists(directory)) return Fail($"Model directory does not exist: {Path.GetFullPath(directory)}");
+        var found = false;
+        var failed = false;
+        var rootReport = ModelValidator.Validate(directory);
+        if (rootReport.ManifestPresent)
+        {
+            found = true;
+            if (!ReportVerification(rootReport, directory)) failed = true;
+        }
+        foreach (var sub in Directory.EnumerateDirectories(directory))
+        {
+            var report = ModelValidator.Validate(sub);
+            if (!report.ManifestPresent) continue;
+            found = true;
+            if (!ReportVerification(report, sub)) failed = true;
+        }
+        if (!found)
+        {
+            Console.WriteLine($"No installed packages found under: {Path.GetFullPath(directory)}");
+            return 0;
+        }
+        return failed ? 1 : 0;
+    }
+
+    private static bool ReportVerification(ModelValidationReport report, string directory)
+    {
+        var label = report.PackageId ?? Path.GetFileName(directory);
+        if (report.Complete)
+        {
+            Console.WriteLine($"OK    {label} (checked {report.CheckedFiles} file(s), {report.CheckedBytes} byte(s))");
+            return true;
+        }
+        Console.WriteLine($"FAIL  {label}: {ModelValidator.FormatIssues(report)}");
+        Console.WriteLine($"      repair: audiocpp-net models download {label} --overwrite --models-dir {Path.GetDirectoryName(directory)}");
+        return false;
+    }
+
+    private static string ResolveModelPath(string modelsDirectory, string standardDirectory, string packageId)
+    {
+        var standard = Path.Combine(modelsDirectory, standardDirectory);
+        if (Directory.Exists(standard)) return standard;
+        return ModelValidator.FindPackageDirectory(modelsDirectory, packageId) ?? standard;
+    }
+
     private static void Progress(ulong downloaded, ulong total, string? message)
     {
         var suffix = total == 0 ? $"{downloaded} bytes" : $"{downloaded}/{total} bytes";
@@ -244,6 +292,7 @@ Usage:
   audiocpp-net models packages [--native PATH]                  List downloadable model packages
   audiocpp-net models path [--models-dir PATH]                  Show the local model directory
   audiocpp-net models download PACKAGE_ID [options]              Download one package
+  audiocpp-net models verify [--models-dir PATH]                 Verify installed packages for missing files
   audiocpp-net asr --input AUDIO.wav [options]                    Transcribe a PCM WAV file
   audiocpp-net tts --text TEXT --output AUDIO.wav [--voice-ref WAV] [--reference-text TEXT] Synthesize speech
   audiocpp-net verify [options]                                   Download minimal ASR/TTS and run both

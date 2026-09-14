@@ -73,6 +73,8 @@ public static class ModelDirectory
     {
         get
         {
+            var configured = Environment.GetEnvironmentVariable("AUDIOCPP_MODELS_DIR");
+            if (!string.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured.Trim());
             var root = OperatingSystem.IsWindows()
                 ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
                 : Environment.GetEnvironmentVariable("XDG_DATA_HOME") ??

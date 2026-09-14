@@ -31,7 +31,19 @@ dotnet run --project src/AudioCpp.NET.Console -- models download qwen3_tts_1_7b_
 # Use a Hugging Face mirror for faster downloads
 dotnet run --project src/AudioCpp.NET.Console -- models download citrinet_asr_q8_0 `
   --models-dir .\models --hf-endpoint https://hf-mirror.com
+# Re-check every installed package against its manifest at any time
+dotnet run --project src/AudioCpp.NET.Console -- models verify --models-dir .\models
 ```
+
+Every `models download` automatically verifies the freshly installed package
+against its `.audiocpp-package-<id>.json` manifest (the package manager records
+each expected file with its byte size and SHA-256 etag). Missing files or size
+mismatches are reported with the exact paths, and the command exits non-zero so
+scripts can react. `models verify` re-checks all installed packages on demand.
+Loading a model directory runs the same check **before** the native call, so an
+interrupted or partial download fails fast with `Model at '…' is incomplete.
+missing: … (expected N byte(s)) Re-download the package or restore the missing
+files.` instead of a cryptic native "missing file" error.
 
 Hugging Face downloads support `--hf-endpoint URL` on `models download` and
 `verify`. The option takes precedence over `AUDIOCPP_HF_BASE_URL` and
@@ -67,6 +79,11 @@ detected local model, run ASR on an uploaded WAV, and synthesize voice-clone
 TTS with inline playback and download. Managed requests are serialized
 because the native runtime is not thread-safe; generated audio is served
 only from the build artifacts directory and TLS verification stays on.
+
+Every detected model shows a completeness badge (`✓ complete` / `✗ incomplete`
+/ `unmanaged`) plus a **VERIFY** button that re-checks the package manifest on
+demand (`POST /api/verify`). A failed install reports the missing files
+directly in the studio log.
 
 ```powershell
 # Optional pre-configuration; every field stays editable in the UI
