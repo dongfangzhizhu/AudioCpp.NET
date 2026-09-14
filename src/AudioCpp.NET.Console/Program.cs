@@ -120,7 +120,9 @@ internal static class ConsoleApp
         if (string.IsNullOrWhiteSpace(input)) return Fail("Usage: asr --input AUDIO.wav [--models-dir PATH] [--model PATH]");
         var modelPath = Option(args, "--model") ??
             ResolveModelPath(Option(args, "--models-dir") ?? ModelDirectory.Default, "Citrinet-ASR-GGUF", "citrinet_asr_q8_0");
-        using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = "citrinet_asr" });
+        // Do not force Citrinet here. LoadModel derives the family from the package
+        // manifest, so Audio8 and future ASR packages receive their own loader.
+        using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath });
         var audio = WaveFile.Read(input);
         var text = model.Transcribe(new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels });
         Console.WriteLine(text);
@@ -183,7 +185,7 @@ internal static class ConsoleApp
         var output = Option(args, "--output") ?? Path.Combine(models, "verification-tts.wav");
         var asrPath = Path.Combine(models, "Citrinet-ASR-GGUF");
         var ttsPath = Path.Combine(models, "Qwen3-TTS-12Hz-0.6B-Base-GGUF");
-        using var asr = runtime.LoadModel(new AudioCppModelOptions { ModelPath = asrPath, FamilyHint = "citrinet_asr" });
+        using var asr = runtime.LoadModel(new AudioCppModelOptions { ModelPath = asrPath });
         var inputAudio = WaveFile.Read(input);
         Console.WriteLine($"ASR: {asr.Transcribe(new AsrRequest { Audio = inputAudio.Samples, SampleRate = inputAudio.SampleRate, Channels = inputAudio.Channels })}");
         using var tts = runtime.LoadModel(new AudioCppModelOptions { ModelPath = ttsPath, FamilyHint = "qwen3_tts" });
