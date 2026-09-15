@@ -64,36 +64,37 @@ public sealed record AudioCppTaskResult(JsonElement RawJson)
     public IReadOnlyList<AudioCppWordTimestamp> WordTimestamps => Array("word_timestamps").Select(ParseWordTimestamp).ToArray();
     public AudioCppArtifact? Artifact => RawJson.TryGetProperty("artifact_output", out var value) && value.ValueKind == JsonValueKind.Object ? ParseArtifact(value) : null;
     public IReadOnlyList<AudioCppArtifact> Artifacts => Array("output_artifacts").Select(ParseArtifact).ToArray();
-    private IEnumerable<JsonElement> Array(string name) => RawJson.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
+    internal IEnumerable<JsonElement> Array(string name) => Array(RawJson, name);
+    internal static IEnumerable<JsonElement> Array(JsonElement parent, string name) => parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
         ? value.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object) : [];
-    private static IReadOnlyDictionary<string, string> ParseMeta(JsonElement value) => value.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.Object
+    internal static IReadOnlyDictionary<string, string> ParseMeta(JsonElement value) => value.TryGetProperty("meta", out var meta) && meta.ValueKind == JsonValueKind.Object
         ? meta.EnumerateObject().ToDictionary(property => property.Name,
             property => property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() ?? "" : property.Value.GetRawText())
         : new Dictionary<string, string>();
-    private static AudioCppTimeSpan ParseSpan(JsonElement value) => new(
+    internal static AudioCppTimeSpan ParseSpan(JsonElement value) => new(
         value.TryGetProperty("start_sample", out var start) && start.TryGetInt64(out var startSample) ? startSample : 0,
         value.TryGetProperty("end_sample", out var end) && end.TryGetInt64(out var endSample) ? endSample : 0);
-    private static float Confidence(JsonElement value) =>
+    internal static float Confidence(JsonElement value) =>
         value.TryGetProperty("confidence", out var confidence) && confidence.ValueKind == JsonValueKind.Number ? confidence.GetSingle() : 0f;
-    private static AudioCppSpeechSegment ParseSpeechSegment(JsonElement value) => new(ParseSpan(value), Confidence(value),
+    internal static AudioCppSpeechSegment ParseSpeechSegment(JsonElement value) => new(ParseSpan(value), Confidence(value),
         value.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String ? text.GetString() : null);
-    private static AudioCppSpeakerTurn ParseSpeakerTurn(JsonElement value) => new(ParseSpan(value),
+    internal static AudioCppSpeakerTurn ParseSpeakerTurn(JsonElement value) => new(ParseSpan(value),
         value.TryGetProperty("speaker_id", out var speakerId) && speakerId.ValueKind == JsonValueKind.String ? speakerId.GetString() ?? "" : "",
         Confidence(value),
         value.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String ? text.GetString() : null);
-    private static AudioCppWordTimestamp ParseWordTimestamp(JsonElement value) => new(ParseSpan(value),
+    internal static AudioCppWordTimestamp ParseWordTimestamp(JsonElement value) => new(ParseSpan(value),
         value.TryGetProperty("word", out var word) && word.ValueKind == JsonValueKind.String ? word.GetString() ?? "" : "",
         Confidence(value));
-    private static AudioCppAudioClip ParseAudioClip(JsonElement value) => new(
+    internal static AudioCppAudioClip ParseAudioClip(JsonElement value) => new(
         value.TryGetProperty("sample_rate", out var sampleRate) && sampleRate.TryGetInt32(out var rate) ? rate : 0,
         value.TryGetProperty("channels", out var channels) && channels.TryGetInt32(out var channelCount) ? channelCount : 1,
         value.TryGetProperty("samples", out var samples) && samples.ValueKind == JsonValueKind.Array
             ? samples.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Number).Select(item => item.GetSingle()).ToArray() : []);
-    private static AudioCppNamedAudio ParseNamedAudio(JsonElement value) => new(
+    internal static AudioCppNamedAudio ParseNamedAudio(JsonElement value) => new(
         value.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() ?? "" : "",
         value.TryGetProperty("audio", out var audio) && audio.ValueKind == JsonValueKind.Object ? ParseAudioClip(audio) : new AudioCppAudioClip(0, 1, []),
         ParseMeta(value));
-    private static AudioCppArtifact ParseArtifact(JsonElement value) => new(
+    internal static AudioCppArtifact ParseArtifact(JsonElement value) => new(
         value.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String ? id.GetString() ?? "" : "",
         value.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.String ? kind.GetString() ?? "custom" : "custom",
         value.TryGetProperty("payload_hex", out var payload) && payload.ValueKind == JsonValueKind.String ? payload.GetString() ?? "" : "",
@@ -160,7 +161,7 @@ public sealed class AudioCppRuntime : IDisposable
         var (handle, error) = InteropOperations.LoadModel(modelPath, familyHint, BuildInfo.Backend,
             options.Device, options.Threads, ToJson(options.LoadOptions));
         if (handle.IsInvalid) { handle.Dispose(); throw new AudioCppLoadException(error); }
-        return new AudioCppModel(handle);
+        return new AudioCppModel(handle, BuildInfo.Capabilities);
     }
 
     private string? DeriveFamily(string packageId)
@@ -269,9 +270,34 @@ internal static class CatalogJson
 public sealed class AudioCppModel : IDisposable
 {
     private readonly SafeModelHandle _handle;
+    private readonly ulong _capabilities;
     private bool _disposed;
 
-    internal AudioCppModel(SafeModelHandle handle) => _handle = handle;
+    internal AudioCppModel(SafeModelHandle handle, ulong capabilities)
+    {
+        _handle = handle;
+        _capabilities = capabilities;
+    }
+
+    internal bool IsDisposed => _disposed;
+
+    public AudioCppStreamSession StartStreaming(string task, IReadOnlyDictionary<string, string>? options = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(task);
+        if ((_capabilities & AudioCppCapabilities.Streaming) == 0)
+            throw new NotSupportedException(
+                "The loaded native shim does not advertise AUDIOCPP_CAP_STREAMING; rebuild the shim to use streaming sessions.");
+        try
+        {
+            var (handle, info) = InteropOperations.OpenStream(_handle, task, AudioCppRuntime.ToJson(options));
+            return new AudioCppStreamSession(this, handle, AudioCppStreamInfo.Parse(info));
+        }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        {
+            throw new AudioCppInferenceException(exception.Message, exception);
+        }
+    }
 
     public AudioBuffer Synthesize(TtsRequest request)
     {
@@ -329,6 +355,130 @@ public sealed class AudioCppModel : IDisposable
         }
         using var document = JsonDocument.Parse(json);
         return new AudioCppTaskResult(document.RootElement.Clone());
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _handle.Dispose();
+    }
+}
+
+public sealed record AudioCppStreamPolicy(string Input, string Output, long PreferredChunkSamples, double PreferredChunkSeconds);
+
+public sealed record AudioCppStreamInfo(string Family, string Task, AudioCppStreamPolicy Policy)
+{
+    internal static AudioCppStreamInfo Parse(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        return new AudioCppStreamInfo(
+            root.TryGetProperty("family", out var family) && family.ValueKind == JsonValueKind.String ? family.GetString() ?? "" : "",
+            root.TryGetProperty("task", out var task) && task.ValueKind == JsonValueKind.String ? task.GetString() ?? "" : "",
+            new AudioCppStreamPolicy(
+                root.TryGetProperty("input", out var input) && input.ValueKind == JsonValueKind.String ? input.GetString() ?? "" : "",
+                root.TryGetProperty("output", out var output) && output.ValueKind == JsonValueKind.String ? output.GetString() ?? "" : "",
+                root.TryGetProperty("preferred_chunk_samples", out var chunkSamples) && chunkSamples.TryGetInt64(out var samples) ? samples : 0,
+                root.TryGetProperty("preferred_chunk_seconds", out var chunkSeconds) && chunkSeconds.ValueKind == JsonValueKind.Number ? chunkSeconds.GetDouble() : 0));
+    }
+}
+
+public sealed record AudioCppVoiceActivity(string Kind, long Sample, float Probability, AudioCppSpeechSegment? Segment);
+
+public sealed record AudioCppStreamEvent(
+    string? PartialText, string? Language, IReadOnlyList<AudioCppVoiceActivity> VoiceActivity,
+    AudioCppAudioClip? AudioOutput, IReadOnlyList<AudioCppSpeakerTurn> SpeakerTurns,
+    IReadOnlyList<AudioCppWordTimestamp> WordTimestamps, IReadOnlyList<AudioCppArtifact> Artifacts,
+    bool IsFinal)
+{
+    internal static IReadOnlyList<AudioCppStreamEvent> Parse(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return Parse(document.RootElement);
+    }
+
+    internal static IReadOnlyList<AudioCppStreamEvent> Parse(JsonElement root) =>
+        AudioCppTaskResult.Array(root, "events").Select(ParseEvent).ToArray();
+
+    private static AudioCppStreamEvent ParseEvent(JsonElement value) => new(
+        value.TryGetProperty("partial_text", out var partial) && partial.ValueKind == JsonValueKind.Object
+            ? partial.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String ? text.GetString() : null : null,
+        value.TryGetProperty("partial_text", out var partialLanguage) && partialLanguage.ValueKind == JsonValueKind.Object
+            ? partialLanguage.TryGetProperty("language", out var language) && language.ValueKind == JsonValueKind.String ? language.GetString() : null : null,
+        value.TryGetProperty("voice_activity", out var voiceActivity) && voiceActivity.ValueKind == JsonValueKind.Array
+            ? voiceActivity.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object).Select(ParseVoiceActivity).ToArray() : [],
+        value.TryGetProperty("audio_output", out var audio) && audio.ValueKind == JsonValueKind.Object
+            ? AudioCppTaskResult.ParseAudioClip(audio) : null,
+        AudioCppTaskResult.Array(value, "speaker_turns").Select(AudioCppTaskResult.ParseSpeakerTurn).ToArray(),
+        AudioCppTaskResult.Array(value, "word_timestamps").Select(AudioCppTaskResult.ParseWordTimestamp).ToArray(),
+        AudioCppTaskResult.Array(value, "output_artifacts").Select(AudioCppTaskResult.ParseArtifact).ToArray(),
+        value.TryGetProperty("is_final", out var isFinal) && isFinal.ValueKind == JsonValueKind.True);
+
+    private static AudioCppVoiceActivity ParseVoiceActivity(JsonElement value) => new(
+        value.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.String ? kind.GetString() ?? "speech_segment" : "speech_segment",
+        value.TryGetProperty("sample", out var sample) && sample.TryGetInt64(out var sampleValue) ? sampleValue : 0,
+        value.TryGetProperty("probability", out var probability) && probability.ValueKind == JsonValueKind.Number ? probability.GetSingle() : 0f,
+        value.TryGetProperty("segment", out var segment) && segment.ValueKind == JsonValueKind.Object
+            ? AudioCppTaskResult.ParseSpeechSegment(segment) : null);
+}
+
+/// <summary>
+/// Live streaming session fed with PCM chunks. The session borrows the lifetime of
+/// its owning <see cref="AudioCppModel"/>; dispose the stream before the model.
+/// </summary>
+public sealed class AudioCppStreamSession : IDisposable
+{
+    private readonly AudioCppModel _model;
+    private readonly SafeStreamHandle _handle;
+    private bool _disposed;
+    private bool _finished;
+
+    internal AudioCppStreamSession(AudioCppModel model, SafeStreamHandle handle, AudioCppStreamInfo info)
+    {
+        _model = model;
+        _handle = handle;
+        Info = info;
+    }
+
+    public AudioCppStreamInfo Info { get; }
+
+    public IReadOnlyList<AudioCppStreamEvent> PushPcm(ReadOnlyMemory<float> samples, int sampleRate, int channels = 1)
+    {
+        ThrowIfUsable();
+        if (samples.IsEmpty) throw new ArgumentException("Samples must not be empty.", nameof(samples));
+        if (sampleRate <= 0 || channels <= 0) throw new ArgumentException("SampleRate and channels must be positive.");
+        try
+        {
+            return AudioCppStreamEvent.Parse(InteropOperations.StreamPushPcm(_handle, samples.Span, sampleRate, channels));
+        }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        {
+            throw new AudioCppInferenceException(exception.Message, exception);
+        }
+    }
+
+    public AudioCppTaskResult Finish()
+    {
+        ThrowIfUsable();
+        if (_finished) throw new InvalidOperationException("The stream has already been finished.");
+        _finished = true;
+        try
+        {
+            var json = InteropOperations.StreamFinish(_handle);
+            using var document = JsonDocument.Parse(json);
+            return new AudioCppTaskResult(document.RootElement.Clone());
+        }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        {
+            throw new AudioCppInferenceException(exception.Message, exception);
+        }
+    }
+
+    private void ThrowIfUsable()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ObjectDisposedException.ThrowIf(_model.IsDisposed, _model);
     }
 
     public void Dispose()

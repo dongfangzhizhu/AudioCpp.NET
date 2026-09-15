@@ -152,6 +152,74 @@ public sealed class AudioCppRuntimeTests
         Assert.Throws<ArgumentException>(() => new AudioCppModelProxy().Synthesize(new TtsRequest { Text = " " }));
     }
 
+    [Fact]
+    public void StreamingCapabilityUsesStableBit()
+    {
+        Assert.Equal(1UL << 4, AudioCppCapabilities.Streaming);
+    }
+
+    [Fact]
+    public void StreamInfoParsesPolicy()
+    {
+        const string json = """
+            {"family":"silero_vad","task":"vad","input":"audio_chunks","output":"pull_events","preferred_chunk_samples":512,"preferred_chunk_seconds":0.032}
+            """;
+        var info = AudioCppStreamInfo.Parse(json);
+        Assert.Equal("silero_vad", info.Family);
+        Assert.Equal("vad", info.Task);
+        Assert.Equal("audio_chunks", info.Policy.Input);
+        Assert.Equal("pull_events", info.Policy.Output);
+        Assert.Equal(512, info.Policy.PreferredChunkSamples);
+        Assert.Equal(0.032, info.Policy.PreferredChunkSeconds, 3);
+    }
+
+    [Fact]
+    public void StreamEventsParsePartialTextAndVoiceActivity()
+    {
+        const string json = """
+            {"events":[
+              {"partial_text":{"text":"hel","language":"en"},"voice_activity":[{"kind":"speech_start","sample":0,"probability":0.9,"segment":null}],"audio_output":null,"named_audio_outputs":[],"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":false},
+              {"partial_text":{"text":"hello world","language":"en"},"voice_activity":[{"kind":"speech_end","sample":100,"probability":0.8,"segment":{"start_sample":0,"end_sample":100,"confidence":0.7,"text":"hello world"}}],"audio_output":{"sample_rate":16000,"channels":1,"samples":[0.5]},"named_audio_outputs":[],"speaker_turns":[],"word_timestamps":[{"start_sample":1,"end_sample":9,"word":"hello","confidence":0.6}],"output_artifacts":[{"id":"vad","kind":"vad_state","payload_hex":"ab","meta":{}}],"is_final":true}
+            ]}
+            """;
+        var events = AudioCppStreamEvent.Parse(json);
+        Assert.Equal(2, events.Count);
+        Assert.Equal("hel", events[0].PartialText);
+        Assert.Equal("en", events[0].Language);
+        Assert.False(events[0].IsFinal);
+        var start = Assert.Single(events[0].VoiceActivity);
+        Assert.Equal("speech_start", start.Kind);
+        Assert.Equal(0, start.Sample);
+        Assert.Equal(0.9f, start.Probability);
+        Assert.Null(start.Segment);
+        Assert.Null(events[0].AudioOutput);
+        Assert.Equal("hello world", events[1].PartialText);
+        Assert.True(events[1].IsFinal);
+        var end = Assert.Single(events[1].VoiceActivity);
+        Assert.Equal("speech_end", end.Kind);
+        Assert.Equal(new AudioCppTimeSpan(0, 100), end.Segment!.Span);
+        Assert.Equal(0.7f, end.Segment.Confidence);
+        Assert.Equal(16000, events[1].AudioOutput!.SampleRate);
+        var word = Assert.Single(events[1].WordTimestamps);
+        Assert.Equal("hello", word.Word);
+        var artifact = Assert.Single(events[1].Artifacts);
+        Assert.Equal("vad_state", artifact.Kind);
+        Assert.Equal("ab", artifact.PayloadHex);
+    }
+
+    [Fact]
+    public void StreamEventsTolerateMissingFields()
+    {
+        const string json = "{\"events\":[{}]}";
+        var events = AudioCppStreamEvent.Parse(json);
+        var single = Assert.Single(events);
+        Assert.Null(single.PartialText);
+        Assert.Null(single.Language);
+        Assert.Empty(single.VoiceActivity);
+        Assert.Null(single.AudioOutput);
+        Assert.False(single.IsFinal);
+    }
+
     private static string? InvokeOptions(IReadOnlyDictionary<string, string> options) => (string?)InvokeStatic("ToJson", options);
 
     private static IReadOnlyDictionary<string, string> InvokeBuildRequestOptions(TtsRequest? request) =>

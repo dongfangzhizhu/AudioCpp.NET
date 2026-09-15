@@ -130,6 +130,48 @@ internal static class InteropOperations
         }
     }
 
+    internal static (SafeStreamHandle Handle, string Info) OpenStream(SafeModelHandle model, string task, string? options)
+    {
+        using var error = new NativeErrorBuffer();
+        var status = NativeMethods.StreamOpen(model, task, options, out var native, out var info,
+            error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return (new SafeStreamHandle(native), Marshal.PtrToStringUTF8(info) ?? "{}");
+        }
+        finally { if (info != IntPtr.Zero) NativeMethods.BufferFree(info); }
+    }
+
+    internal static unsafe string StreamPushPcm(SafeStreamHandle stream, ReadOnlySpan<float> samples,
+        int sampleRate, int channels)
+    {
+        fixed (float* samplesPtr = samples)
+        using (var error = new NativeErrorBuffer())
+        {
+            var status = NativeMethods.StreamPushPcm(stream, samplesPtr, samples.Length, sampleRate, channels,
+                out var json, error.Pointer, (nuint)error.Length);
+            try
+            {
+                if (status != 0) throw new NativeCallException(status, error.Text);
+                return Marshal.PtrToStringUTF8(json) ?? "{}";
+            }
+            finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+        }
+    }
+
+    internal static string StreamFinish(SafeStreamHandle stream)
+    {
+        using var error = new NativeErrorBuffer();
+        var status = NativeMethods.StreamFinish(stream, out var json, error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return Marshal.PtrToStringUTF8(json) ?? "{}";
+        }
+        finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+    }
+
     internal sealed class NativeErrorBuffer : IDisposable
     {
         private readonly IntPtr _memory = Marshal.AllocHGlobal(ErrorBufferLength);

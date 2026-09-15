@@ -75,9 +75,26 @@ internal static partial class NativeMethods
         float* referencePcm, int referenceCount, int referenceSampleRate, string? optionsJson,
         out IntPtr outputJson, IntPtr error, nuint errorLength);
 
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_open", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int StreamOpen(
+        SafeModelHandle model, string task, string? optionsJson,
+        out IntPtr stream, out IntPtr info, IntPtr error, nuint errorLength);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_push_pcm", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int StreamPushPcm(
+        SafeStreamHandle stream, float* samples, int sampleCount, int sampleRate, int channels,
+        out IntPtr outputJson, IntPtr error, nuint errorLength);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_finish", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int StreamFinish(
+        SafeStreamHandle stream, out IntPtr outputJson, IntPtr error, nuint errorLength);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_buffer_free")]
     internal static partial void BufferFree(IntPtr buffer);
 
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_model_free")]
     internal static partial void ModelFree(IntPtr model);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_free")]
+    internal static partial void StreamFree(IntPtr stream);
 }
