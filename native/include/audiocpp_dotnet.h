@@ -47,6 +47,7 @@ typedef struct audiocpp_abi_info {
 } audiocpp_abi_info;
 
 typedef struct audiocpp_model audiocpp_model;
+typedef struct audiocpp_stream audiocpp_stream;
 typedef void (*audiocpp_download_progress_callback)(
     uint64_t downloaded_bytes, uint64_t total_bytes, const char * message, void * user_data);
 
@@ -103,6 +104,29 @@ AUDIOCPP_API int32_t audiocpp_install_package(
     char ** out_message,
     char * err,
     size_t errlen);
+AUDIOCPP_API int32_t audiocpp_stream_open(
+    audiocpp_model * model,
+    const char * task,
+    const char * options_json,
+    audiocpp_stream ** out_stream,
+    char ** out_info,
+    char * err,
+    size_t errlen);
+AUDIOCPP_API int32_t audiocpp_stream_push_pcm(
+    audiocpp_stream * stream,
+    const float * samples,
+    int32_t sample_count,
+    int32_t sample_rate,
+    int32_t channels,
+    char ** out_json,
+    char * err,
+    size_t errlen);
+AUDIOCPP_API int32_t audiocpp_stream_finish(
+    audiocpp_stream * stream,
+    char ** out_json,
+    char * err,
+    size_t errlen);
+AUDIOCPP_API void audiocpp_stream_free(audiocpp_stream * stream);
 AUDIOCPP_API void audiocpp_buffer_free(void * buffer);
 AUDIOCPP_API void audiocpp_model_free(audiocpp_model * model);
 

@@ -180,12 +180,157 @@ void apply_style_condition(engine::runtime::TaskRequest & request) {
         request.voice->style = std::move(style);
     }
 }
+
+// ---- JSON serialization shared by audiocpp_model_run_json and the streaming ABI ----
+void write_audio_json(std::ostringstream & json, const engine::runtime::AudioBuffer & audio) {
+    json << "{\"sample_rate\":" << audio.sample_rate << ",\"channels\":" << audio.channels << ",\"samples\":[";
+    for (size_t i = 0; i < audio.samples.size(); ++i) { if (i) json << ','; json << audio.samples[i]; }
+    json << "]}";
+}
+
+void write_meta_json(std::ostringstream & json, const std::unordered_map<std::string, std::string> & meta) {
+    json << '{';
+    size_t meta_index = 0;
+    for (const auto & item : meta) { if (meta_index++) json << ','; json << "\""
+        << json_escape(item.first) << "\":\"" << json_escape(item.second) << "\""; }
+    json << '}';
+}
+
+const char * artifact_kind_name(engine::runtime::ArtifactKind kind) {
+    using K = engine::runtime::ArtifactKind;
+    switch (kind) {
+    case K::SpeakerEmbedding: return "speaker_embedding";
+    case K::StyleEmbedding: return "style_embedding";
+    case K::PromptEmbedding: return "prompt_embedding";
+    case K::AcousticTokens: return "acoustic_tokens";
+    case K::Midi: return "midi";
+    case K::TranscriptAlignment: return "transcript_alignment";
+    case K::DiarizationState: return "diarization_state";
+    case K::VadState: return "vad_state";
+    default: return "custom";
+    }
+}
+
+void write_artifact_json(std::ostringstream & json, const engine::runtime::VoiceArtifact & artifact) {
+    static constexpr char hex[] = "0123456789abcdef";
+    json << "{\"id\":\"" << json_escape(artifact.id) << "\",\"kind\":\""
+         << artifact_kind_name(artifact.kind) << "\",\"payload_hex\":\"";
+    for (const auto byte : artifact.payload) {
+        const auto value = static_cast<unsigned char>(byte);
+        json << hex[value >> 4] << hex[value & 15];
+    }
+    json << "\",\"meta\":";
+    write_meta_json(json, artifact.meta);
+    json << '}';
+}
+
+void write_transcript_json(std::ostringstream & json, const engine::runtime::Transcript & transcript) {
+    json << "{\"text\":\"" << json_escape(transcript.text) << "\",\"language\":\""
+         << json_escape(transcript.language) << "\"}";
+}
+
+void write_speech_segment_json(std::ostringstream & json, const engine::runtime::SpeechSegment & segment) {
+    json << "{\"start_sample\":" << segment.span.start_sample << ",\"end_sample\":" << segment.span.end_sample
+         << ",\"confidence\":" << segment.confidence << ",\"text\":\"" << json_escape(segment.text) << "\"}";
+}
+
+void write_speaker_turn_json(std::ostringstream & json, const engine::runtime::SpeakerTurn & turn) {
+    json << "{\"start_sample\":" << turn.span.start_sample << ",\"end_sample\":" << turn.span.end_sample
+         << ",\"speaker_id\":\"" << json_escape(turn.speaker_id) << "\",\"confidence\":" << turn.confidence
+         << ",\"text\":\"" << json_escape(turn.text) << "\"}";
+}
+
+void write_word_timestamp_json(std::ostringstream & json, const engine::runtime::WordTimestamp & word) {
+    json << "{\"start_sample\":" << word.span.start_sample << ",\"end_sample\":" << word.span.end_sample
+         << ",\"word\":\"" << json_escape(word.word) << "\",\"confidence\":" << word.confidence << "}";
+}
+
+const char * voice_activity_kind_name(engine::runtime::VoiceActivityEvent::Kind kind) {
+    using K = engine::runtime::VoiceActivityEvent::Kind;
+    switch (kind) {
+    case K::SpeechStart: return "speech_start";
+    case K::SpeechEnd: return "speech_end";
+    default: return "speech_segment";
+    }
+}
+
+void write_voice_activity_json(std::ostringstream & json, const engine::runtime::VoiceActivityEvent & activity) {
+    json << "{\"kind\":\"" << voice_activity_kind_name(activity.kind)
+         << "\",\"sample\":" << activity.sample
+         << ",\"probability\":" << activity.probability
+         << ",\"segment\":";
+    if (activity.segment.has_value()) write_speech_segment_json(json, *activity.segment);
+    else json << "null";
+    json << '}';
+}
+
+void write_named_audio_json(std::ostringstream & json, const engine::runtime::NamedAudioBuffer & item) {
+    json << "{\"id\":\"" << json_escape(item.id) << "\",\"audio\":";
+    write_audio_json(json, item.audio);
+    json << ",\"meta\":";
+    write_meta_json(json, item.meta);
+    json << '}';
+}
+
+void write_stream_event_json(std::ostringstream & json, const engine::runtime::StreamEvent & event) {
+    json << "{\"partial_text\":";
+    if (event.partial_text.has_value()) write_transcript_json(json, *event.partial_text);
+    else json << "null";
+    json << ",\"voice_activity\":[";
+    for (size_t i = 0; i < event.voice_activity.size(); ++i) { if (i) json << ','; write_voice_activity_json(json, event.voice_activity[i]); }
+    json << "],\"audio_output\":";
+    if (event.audio_output.has_value()) write_audio_json(json, *event.audio_output);
+    else json << "null";
+    json << ",\"named_audio_outputs\":[";
+    for (size_t i = 0; i < event.named_audio_outputs.size(); ++i) { if (i) json << ','; write_named_audio_json(json, event.named_audio_outputs[i]); }
+    json << "],\"speaker_turns\":[";
+    for (size_t i = 0; i < event.speaker_turns.size(); ++i) { if (i) json << ','; write_speaker_turn_json(json, event.speaker_turns[i]); }
+    json << "],\"word_timestamps\":[";
+    for (size_t i = 0; i < event.word_timestamps.size(); ++i) { if (i) json << ','; write_word_timestamp_json(json, event.word_timestamps[i]); }
+    json << "],\"output_artifacts\":[";
+    for (size_t i = 0; i < event.output_artifacts.size(); ++i) { if (i) json << ','; write_artifact_json(json, event.output_artifacts[i]); }
+    json << "],\"is_final\":" << (event.is_final ? "true" : "false") << '}';
+}
+
+// Emitted by both audiocpp_model_run_json and audiocpp_stream_finish; keep the
+// schema identical so managed callers can parse both with the same types.
+void write_task_result_json(std::ostringstream & json, const engine::runtime::TaskResult & result) {
+    json << "{\"schema_version\":" << AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION;
+    if (result.text_output.has_value()) json << ",\"text_output\":\"" << json_escape(result.text_output->text) << "\"";
+    json << ",\"audio_output\":";
+    if (result.audio_output.has_value()) write_audio_json(json, *result.audio_output);
+    else json << "null";
+    json << ",\"named_audio_outputs\":[";
+    for (size_t i = 0; i < result.named_audio_outputs.size(); ++i) { if (i) json << ','; write_named_audio_json(json, result.named_audio_outputs[i]); }
+    json << "],\"speech_segments\":[";
+    for (size_t i = 0; i < result.speech_segments.size(); ++i) { if (i) json << ','; write_speech_segment_json(json, result.speech_segments[i]); }
+    json << "],\"speaker_turns\":[";
+    for (size_t i = 0; i < result.speaker_turns.size(); ++i) { if (i) json << ','; write_speaker_turn_json(json, result.speaker_turns[i]); }
+    json << "],\"word_timestamps\":[";
+    for (size_t i = 0; i < result.word_timestamps.size(); ++i) { if (i) json << ','; write_word_timestamp_json(json, result.word_timestamps[i]); }
+    json << "],\"artifact_output\":";
+    if (result.artifact_output.has_value()) write_artifact_json(json, *result.artifact_output);
+    else json << "null";
+    json << ",\"output_artifacts\":[";
+    for (size_t i = 0; i < result.output_artifacts.size(); ++i) { if (i) json << ','; write_artifact_json(json, result.output_artifacts[i]); }
+    json << "]}";
+}
 }
 
 struct audiocpp_model {
     std::unique_ptr<engine::runtime::ILoadedVoiceModel> model;
     engine::core::BackendConfig backend;
     std::unordered_map<std::string, std::string> session_options;
+};
+
+struct audiocpp_stream {
+    std::unique_ptr<engine::runtime::IVoiceTaskSession> session;
+    engine::runtime::IStreamingVoiceTaskSession * streaming = nullptr;
+    std::string family;
+    std::string task;
+    int64_t samples_pushed = 0;
+    engine::runtime::StreamingInputKind input = engine::runtime::StreamingInputKind::AudioChunks;
+    engine::runtime::StreamingOutputKind output = engine::runtime::StreamingOutputKind::FinalResult;
 };
 
 extern "C" {
@@ -195,14 +340,15 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
         return AUDIOCPP_ERR_BAD_ARG;
     }
     out_info->abi_major = 1;
-    out_info->abi_minor = 1;
-    out_info->shim_version = "audiocpp-dotnet-shim 0.2.0";
+    out_info->abi_minor = 2;
+    out_info->shim_version = "audiocpp-dotnet-shim 0.3.0";
     out_info->audio_cpp_commit = kCommit;
     out_info->backend = kBackend;
     out_info->capabilities = AUDIOCPP_CAP_SYNTHESIZE |
         AUDIOCPP_CAP_TRANSCRIBE |
         AUDIOCPP_CAP_MODEL_MANAGER |
-        AUDIOCPP_CAP_STRUCTURED_RESULTS;
+        AUDIOCPP_CAP_STRUCTURED_RESULTS |
+        AUDIOCPP_CAP_STREAMING;
     return AUDIOCPP_OK;
 }
 
@@ -456,46 +602,133 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
         session->prepare(engine::runtime::build_preparation_request(request));
         const auto result = offline->run(request);
         std::ostringstream json;
-        json << "{\"schema_version\":1";
-        if (result.text_output.has_value()) json << ",\"text_output\":\"" << json_escape(result.text_output->text) << "\"";
-        auto audio_json = [&](const engine::runtime::AudioBuffer & audio) {
-            json << "{\"sample_rate\":" << audio.sample_rate << ",\"channels\":" << audio.channels << ",\"samples\":[";
-            for (size_t i = 0; i < audio.samples.size(); ++i) { if (i) json << ','; json << audio.samples[i]; }
-            json << "]}";
-        };
-        auto meta_json = [&](const std::unordered_map<std::string, std::string> & meta) {
-            json << '{';
-            size_t meta_index = 0;
-            for (const auto & item : meta) { if (meta_index++) json << ','; json << "\"" << json_escape(item.first) << "\":\"" << json_escape(item.second) << "\""; }
-            json << '}';
-        };
-        auto artifact_json = [&](const engine::runtime::VoiceArtifact & artifact) {
-            static constexpr char hex[] = "0123456789abcdef";
-            const auto kind_name = [&]() { using K = engine::runtime::ArtifactKind; switch (artifact.kind) { case K::SpeakerEmbedding: return "speaker_embedding"; case K::StyleEmbedding: return "style_embedding"; case K::PromptEmbedding: return "prompt_embedding"; case K::AcousticTokens: return "acoustic_tokens"; case K::Midi: return "midi"; case K::TranscriptAlignment: return "transcript_alignment"; case K::DiarizationState: return "diarization_state"; case K::VadState: return "vad_state"; default: return "custom"; } }();
-            json << "{\"id\":\"" << json_escape(artifact.id) << "\",\"kind\":\"" << kind_name << "\",\"payload_hex\":\"";
-            for (const auto byte : artifact.payload) { const auto value = static_cast<unsigned char>(byte); json << hex[value >> 4] << hex[value & 15]; }
-            json << "\",\"meta\":";
-            meta_json(artifact.meta);
-            json << '}';
-        };
-        if (result.audio_output.has_value()) { json << ",\"audio_output\":"; audio_json(*result.audio_output); }
-        json << ",\"named_audio_outputs\":[";
-        for (size_t i = 0; i < result.named_audio_outputs.size(); ++i) { if (i) json << ','; json << "{\"id\":\"" << json_escape(result.named_audio_outputs[i].id) << "\",\"audio\":"; audio_json(result.named_audio_outputs[i].audio); json << ",\"meta\":"; meta_json(result.named_audio_outputs[i].meta); json << '}'; }
-        json << "],\"speech_segments\":[";
-        for (size_t i = 0; i < result.speech_segments.size(); ++i) { if (i) json << ','; const auto & x = result.speech_segments[i]; json << "{\"start_sample\":" << x.span.start_sample << ",\"end_sample\":" << x.span.end_sample << ",\"confidence\":" << x.confidence << ",\"text\":\"" << json_escape(x.text) << "\"}"; }
-        json << "],\"speaker_turns\":[";
-        for (size_t i = 0; i < result.speaker_turns.size(); ++i) { if (i) json << ','; const auto & x = result.speaker_turns[i]; json << "{\"start_sample\":" << x.span.start_sample << ",\"end_sample\":" << x.span.end_sample << ",\"speaker_id\":\"" << json_escape(x.speaker_id) << "\",\"confidence\":" << x.confidence << ",\"text\":\"" << json_escape(x.text) << "\"}"; }
-        json << "],\"word_timestamps\":[";
-        for (size_t i = 0; i < result.word_timestamps.size(); ++i) { if (i) json << ','; const auto & x = result.word_timestamps[i]; json << "{\"start_sample\":" << x.span.start_sample << ",\"end_sample\":" << x.span.end_sample << ",\"word\":\"" << json_escape(x.word) << "\",\"confidence\":" << x.confidence << "}"; }
-        json << "],\"artifact_output\":";
-        if (result.artifact_output.has_value()) artifact_json(*result.artifact_output); else json << "null";
-        json << ",\"output_artifacts\":[";
-        for (size_t i = 0; i < result.output_artifacts.size(); ++i) { if (i) json << ','; artifact_json(result.output_artifacts[i]); }
-        json << "]}";
+        write_task_result_json(json, result);
         *out_json = copy_string(json.str()); return AUDIOCPP_OK;
     } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
     } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
 }
+
+AUDIOCPP_API int32_t audiocpp_stream_open(
+    audiocpp_model * context, const char * task, const char * options_json,
+    audiocpp_stream ** out_stream, char ** out_info, char * err, size_t errlen) {
+    if (context == nullptr || context->model == nullptr || out_stream == nullptr || out_info == nullptr) {
+        set_error(err, errlen, "invalid model or output argument"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_stream = nullptr;
+    *out_info = nullptr;
+    if (task == nullptr || *task == '\0') {
+        set_error(err, errlen, "streaming task is required (e.g. \"asr\", \"vad\")"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    try {
+        const auto task_kind = engine::runtime::parse_voice_task_kind(task);
+        bool streaming_supported = false;
+        for (const auto & supported : context->model->capabilities().supported_tasks) {
+            if (supported.task != task_kind) continue;
+            for (const auto mode : supported.modes) {
+                if (mode == engine::runtime::RunMode::Streaming) streaming_supported = true;
+            }
+        }
+        if (!streaming_supported) {
+            set_error(err, errlen, "model does not support streaming for the requested task");
+            return AUDIOCPP_ERR_UNSUPPORTED;
+        }
+        engine::runtime::TaskSpec spec;
+        spec.task = task_kind;
+        spec.mode = engine::runtime::RunMode::Streaming;
+        engine::runtime::TaskRequest request;
+        parse_options(options_json, request.options);
+        apply_style_condition(request);
+        engine::runtime::SessionOptions session_options;
+        session_options.backend = context->backend; session_options.options = context->session_options;
+        auto session = context->model->create_task_session(spec, session_options);
+        auto * streaming = dynamic_cast<engine::runtime::IStreamingVoiceTaskSession *>(session.get());
+        if (streaming == nullptr) {
+            set_error(err, errlen, "model does not provide a streaming session for the requested task");
+            return AUDIOCPP_ERR_UNSUPPORTED;
+        }
+        session->prepare(engine::runtime::build_preparation_request(request));
+        streaming->start_stream(request);
+        const auto policy = streaming->streaming_policy();
+        std::ostringstream info;
+        info << "{\"family\":\"" << json_escape(session->family()) << "\",\"task\":\""
+             << json_escape(engine::runtime::to_string(task_kind))
+             << "\",\"input\":\"" << (policy.input == engine::runtime::StreamingInputKind::AudioChunks ? "audio_chunks" : "none")
+             << "\",\"output\":\"" << (policy.output == engine::runtime::StreamingOutputKind::PullEvents ? "pull_events" : "final_result")
+             << "\",\"preferred_chunk_samples\":" << policy.preferred_audio_chunk_samples
+             << ",\"preferred_chunk_seconds\":" << policy.preferred_audio_chunk_seconds << "}";
+        auto handle = std::make_unique<audiocpp_stream>();
+        handle->session = std::move(session);
+        handle->streaming = streaming;
+        handle->family = handle->session->family();
+        handle->task = task;
+        handle->input = policy.input;
+        handle->output = policy.output;
+        *out_info = copy_string(info.str());
+        *out_stream = handle.release();
+        return AUDIOCPP_OK;
+    } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
+    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+    catch (...) { set_error(err, errlen, "unknown streaming open failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+}
+
+AUDIOCPP_API int32_t audiocpp_stream_push_pcm(
+    audiocpp_stream * stream, const float * samples, int32_t sample_count,
+    int32_t sample_rate, int32_t channels,
+    char ** out_json, char * err, size_t errlen) {
+    if (stream == nullptr || stream->streaming == nullptr || out_json == nullptr) {
+        set_error(err, errlen, "invalid stream or output argument"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_json = nullptr;
+    if (samples == nullptr || sample_count <= 0) {
+        set_error(err, errlen, "samples must point to at least one float"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    if (sample_rate <= 0 || channels <= 0) {
+        set_error(err, errlen, "sample_rate and channels must be positive"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    try {
+        engine::runtime::AudioChunk chunk;
+        chunk.sample_rate = sample_rate;
+        chunk.channels = channels;
+        chunk.start_sample = stream->samples_pushed;
+        chunk.samples.assign(samples, samples + sample_count);
+        stream->samples_pushed += sample_count;
+        std::ostringstream json;
+        json << "{\"events\":[";
+        bool first = true;
+        const auto emit = [&](const engine::runtime::StreamEvent & event) {
+            if (!first) json << ',';
+            first = false;
+            write_stream_event_json(json, event);
+        };
+        emit(stream->streaming->process_audio_chunk(chunk));
+        if (stream->output == engine::runtime::StreamingOutputKind::PullEvents) {
+            while (auto event = stream->streaming->next_stream_event()) emit(*event);
+        }
+        json << "]}";
+        *out_json = copy_string(json.str());
+        return AUDIOCPP_OK;
+    } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
+    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+    catch (...) { set_error(err, errlen, "unknown streaming push failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+}
+
+AUDIOCPP_API int32_t audiocpp_stream_finish(audiocpp_stream * stream, char ** out_json, char * err, size_t errlen) {
+    if (stream == nullptr || stream->streaming == nullptr || out_json == nullptr) {
+        set_error(err, errlen, "invalid stream or output argument"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_json = nullptr;
+    try {
+        const auto result = stream->streaming->finish_stream();
+        std::ostringstream json;
+        write_task_result_json(json, result);
+        *out_json = copy_string(json.str());
+        return AUDIOCPP_OK;
+    } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
+    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+    catch (...) { set_error(err, errlen, "unknown streaming finish failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+}
+
+AUDIOCPP_API void audiocpp_stream_free(audiocpp_stream * stream) { delete stream; }
 
 AUDIOCPP_API void audiocpp_buffer_free(void * buffer) { std::free(buffer); }
 AUDIOCPP_API void audiocpp_model_free(audiocpp_model * model) { delete model; }

@@ -7,3 +7,8 @@ _audiocpp_model_transcribe
 _audiocpp_get_loader_catalog
 _audiocpp_get_package_catalog
 _audiocpp_install_package
+_audiocpp_model_run_json
+_audiocpp_stream_open
+_audiocpp_stream_push_pcm
+_audiocpp_stream_finish
+_audiocpp_stream_free
