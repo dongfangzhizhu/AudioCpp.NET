@@ -59,6 +59,37 @@ The default native build supports `models list`. Build with
 `models download`; that option requires the upstream package manager's TLS
 dependency (system OpenSSL or the pinned BoringSSL archive).
 
+## Streaming
+
+The shim exposes upstream's `IStreamingVoiceTaskSession` through four additive
+ABI exports (`audiocpp_stream_open`, `audiocpp_stream_push_pcm`,
+`audiocpp_stream_finish`, `audiocpp_stream_free`), advertises
+`AUDIOCPP_CAP_STREAMING`, and reports ABI minor 2. `stream_open` rejects models
+whose loader does not list a `streaming` mode for the requested task, so offline
+models fail fast with `model does not support streaming for the requested task`.
+
+Managed code opens a session with `AudioCppModel.StartStreaming(task, options)`,
+feeds it with `PushPcm(samples, sampleRate, channels)` (each call returns the
+typed events produced by that chunk: partial text, voice-activity start/end
+markers, audio output), and completes it with `Finish()`, which yields the same
+`AudioCppTaskResult` shape as the structured offline path.
+
+In this pinned build only `silero_vad` ships a streaming mode; its bundled
+weights live in the upstream checkout at
+`assets/framework/models/silero_vad/silero_vad_16k.safetensors`. The console
+`vad` command streams a file through it:
+
+```powershell
+dotnet run --project src/AudioCpp.NET.Console -- vad `
+  --input ..\audio-pinned\assets\resources\sample_16k.wav `
+  --model ..\audio-pinned\assets\framework\models\silero_vad\silero_vad_16k.safetensors `
+  --family silero_vad
+```
+
+Silero requires 16 kHz input and exact 512-sample chunks; the CLI follows the
+session's advertised policy and zero-pads the final chunk. `asr --stream` runs
+the same loop for any future streaming ASR loader.
+
 ## Interactive console
 
 Run the console without arguments to open an interactive menu that walks

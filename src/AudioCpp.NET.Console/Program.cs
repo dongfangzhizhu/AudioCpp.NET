@@ -15,7 +15,7 @@ internal static class ConsoleApp
             return 0;
         }
 
-        if (args[0] is "asr" or "tts" or "verify")
+        if (args[0] is "asr" or "tts" or "verify" or "vad")
         {
             if (!ConfigureHuggingFaceEndpoint(args)) return 1;
             var inferenceNativePath = Option(args, "--native");
@@ -27,6 +27,7 @@ internal static class ConsoleApp
                     "asr" => RunAsr(runtime, args),
                     "tts" => RunTts(runtime, args),
                     "verify" => await VerifyAsync(runtime, args),
+                    "vad" => RunVad(runtime, args),
                     _ => 1
                 };
             }
@@ -125,6 +126,11 @@ internal static class ConsoleApp
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath });
         var audio = WaveFile.Read(input);
         var request = new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels };
+        if (HasFlag(args, "--stream"))
+        {
+            return StreamAudio(model, audio, Option(args, "--task") ?? "asr",
+                Option(args, "--chunk-ms") is { } chunkMs ? int.Parse(chunkMs) : 100);
+        }
         if (HasFlag(args, "--structured"))
         {
             var structured = model.Run(audioRequest: request);
@@ -141,6 +147,65 @@ internal static class ConsoleApp
         }
         var text = model.Transcribe(request);
         Console.WriteLine(text);
+        return 0;
+    }
+
+    private static int RunVad(AudioCppRuntime runtime, string[] args)
+    {
+        var input = Option(args, "--input");
+        if (string.IsNullOrWhiteSpace(input) || string.IsNullOrWhiteSpace(Option(args, "--model")))
+            return Fail("Usage: vad --input AUDIO.wav --model PATH [--family NAME] [--chunk-ms N]");
+        var audio = WaveFile.Read(input);
+        using var model = runtime.LoadModel(new AudioCppModelOptions
+        {
+            ModelPath = Option(args, "--model")!,
+            FamilyHint = Option(args, "--family"),
+        });
+        return StreamAudio(model, audio, "vad",
+            Option(args, "--chunk-ms") is { } chunkMs ? int.Parse(chunkMs) : 100);
+    }
+
+    private static int StreamAudio(AudioCppModel model, AudioBuffer audio, string task, int chunkMilliseconds)
+    {
+        using var stream = model.StartStreaming(task);
+        var policy = stream.Info.Policy;
+        var chunkSamples = policy.PreferredChunkSamples > 0
+            ? (int)Math.Min(policy.PreferredChunkSamples, int.MaxValue)
+            : Math.Max(1, audio.SampleRate * chunkMilliseconds / 1000);
+        Console.WriteLine($"streaming family={stream.Info.Family} task={stream.Info.Task} " +
+                          $"policy={policy.Input}/{policy.Output} chunk={chunkSamples} samples");
+        var samples = audio.Samples.Span;
+        for (var offset = 0; offset < samples.Length; offset += chunkSamples)
+        {
+            var length = Math.Min(chunkSamples, samples.Length - offset);
+            float[] chunk;
+            if (length < chunkSamples && policy.PreferredChunkSamples > 0)
+            {
+                // Models that demand fixed-size chunks (e.g. Silero's 512-sample
+                // window) receive a zero-padded tail so the stream stays aligned.
+                chunk = new float[chunkSamples];
+                samples.Slice(offset, length).CopyTo(chunk);
+            }
+            else
+            {
+                chunk = samples.Slice(offset, length).ToArray();
+            }
+            foreach (var streamEvent in stream.PushPcm(chunk, audio.SampleRate, audio.Channels))
+            {
+                if (streamEvent.PartialText is not null) Console.WriteLine($"partial {streamEvent.PartialText}");
+                foreach (var activity in streamEvent.VoiceActivity)
+                {
+                    var span = activity.Segment is null ? "" : $" [{activity.Segment.Span.StartSample}..{activity.Segment.Span.EndSample}]";
+                    Console.WriteLine($"voice {activity.Kind} @ {activity.Sample} p={activity.Probability:F2}{span}");
+                }
+                foreach (var turn in streamEvent.SpeakerTurns)
+                    Console.WriteLine($"speaker [{turn.Span.StartSample}..{turn.Span.EndSample}] {turn.SpeakerId} {turn.Confidence:F2}");
+            }
+        }
+        var final = stream.Finish();
+        Console.WriteLine($"final {final.Text ?? ""}");
+        foreach (var segment in final.SpeechSegments)
+            Console.WriteLine($"segment [{segment.Span.StartSample}..{segment.Span.EndSample}] {segment.Confidence:F2} {segment.Text}");
         return 0;
     }
 
@@ -337,6 +402,8 @@ Usage:
   audiocpp-net models download PACKAGE_ID [options]              Download one package
   audiocpp-net models verify [--models-dir PATH]                 Verify installed packages for missing files
   audiocpp-net asr --input AUDIO.wav [options]                    Transcribe a PCM WAV file
+  audiocpp-net asr --input AUDIO.wav --stream [options]           Stream a file through a streaming ASR session
+  audiocpp-net vad --input AUDIO.wav --model PATH [--family NAME] Stream a file through a streaming VAD session
   audiocpp-net tts --text TEXT --output AUDIO.wav [--voice-ref WAV] [--reference-text TEXT] Synthesize speech
   audiocpp-net verify [options]                                   Download minimal ASR/TTS and run both
 
