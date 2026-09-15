@@ -3,8 +3,8 @@ project(AudioCppDotNetNative LANGUAGES C CXX)
 
 set(AUDIOCPP_SRC "${CMAKE_CURRENT_SOURCE_DIR}/../audio.cpp" CACHE PATH "Pinned audio.cpp checkout")
 set(AUDIOCPP_BACKEND "cpu" CACHE STRING "cpu|cuda|vulkan|hip|metal")
-set(AUDIOCPP_MODEL_SET "custom" CACHE STRING "audio.cpp model set")
-set(AUDIOCPP_MODELS "citrinet_asr;qwen3_tts" CACHE STRING "Models for the custom model set")
+set(AUDIOCPP_MODEL_SET "full" CACHE STRING "audio.cpp model set")
+set(AUDIOCPP_MODELS "" CACHE STRING "Models for the custom model set")
 option(AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER "Enable native model catalog and downloader" ON)
 set(AUDIOCPP_PINNED_COMMIT "78d47706c30ef215ba9ad3559baff309efeb5260")
 

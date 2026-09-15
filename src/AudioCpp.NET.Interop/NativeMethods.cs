@@ -69,6 +69,12 @@ internal static partial class NativeMethods
         SafeModelHandle model, float* audioSamples, int audioCount, int audioSampleRate, int audioChannels,
         string? optionsJson, out IntPtr outputText, IntPtr error, nuint errorLength);
 
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_model_run_json", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int ModelRunJson(SafeModelHandle model, string? task, string? text,
+        float* audioSamples, int audioCount, int audioSampleRate, int audioChannels, string? voiceId,
+        float* referencePcm, int referenceCount, int referenceSampleRate, string? optionsJson,
+        out IntPtr outputJson, IntPtr error, nuint errorLength);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_buffer_free")]
     internal static partial void BufferFree(IntPtr buffer);
 

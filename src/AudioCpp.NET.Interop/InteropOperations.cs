@@ -117,6 +117,19 @@ internal static class InteropOperations
         }
     }
 
+    internal static unsafe string RunJson(SafeModelHandle model, string? task, string? text, ReadOnlySpan<float> audio,
+        int sampleRate, int channels, string? voiceId, ReadOnlySpan<float> reference, int referenceRate, string? options)
+    {
+        fixed (float* audioPtr = audio) fixed (float* referencePtr = reference)
+        using (var error = new NativeErrorBuffer())
+        {
+            var status = NativeMethods.ModelRunJson(model, task, text, audioPtr, audio.Length, sampleRate, channels,
+                voiceId, referencePtr, reference.Length, referenceRate, options, out var json, error.Pointer, (nuint)error.Length);
+            try { if (status != 0) throw new NativeCallException(status, error.Text); return Marshal.PtrToStringUTF8(json) ?? "{}"; }
+            finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+        }
+    }
+
     internal sealed class NativeErrorBuffer : IDisposable
     {
         private readonly IntPtr _memory = Marshal.AllocHGlobal(ErrorBufferLength);

@@ -26,6 +26,16 @@ typedef enum audiocpp_status {
     AUDIOCPP_ERR_DOWNLOAD_FAILED = 5,
 } audiocpp_status;
 
+enum {
+    AUDIOCPP_CAP_SYNTHESIZE = 1ull << 0,
+    AUDIOCPP_CAP_TRANSCRIBE = 1ull << 1,
+    AUDIOCPP_CAP_MODEL_MANAGER = 1ull << 2,
+    AUDIOCPP_CAP_STRUCTURED_RESULTS = 1ull << 3,
+    AUDIOCPP_CAP_STREAMING = 1ull << 4,
+};
+
+#define AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION 1u
+
 typedef struct audiocpp_abi_info {
     uint32_t struct_size;
     uint32_t abi_major;
@@ -76,6 +86,12 @@ AUDIOCPP_API int32_t audiocpp_model_transcribe(
     char * err,
     size_t errlen);
 AUDIOCPP_API int32_t audiocpp_get_loader_catalog(char ** out_json, char * err, size_t errlen);
+AUDIOCPP_API int32_t audiocpp_model_run_json(
+    audiocpp_model * model, const char * task, const char * text,
+    const float * audio_samples, int32_t audio_count, int32_t audio_sample_rate,
+    int32_t audio_channels, const char * voice_id, const float * ref_pcm,
+    int32_t ref_count, int32_t ref_sample_rate, const char * options_json,
+    char ** out_json, char * err, size_t errlen);
 AUDIOCPP_API int32_t audiocpp_get_package_catalog(char ** out_json, char * err, size_t errlen);
 AUDIOCPP_API int32_t audiocpp_install_package(
     const char * package_id,

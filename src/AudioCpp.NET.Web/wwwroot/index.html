@@ -77,6 +77,7 @@
     <section class="col">
 
       <article class="panel deck" style="--reveal:3">
+        <div class="model-capabilities" id="modelCapabilities" aria-live="polite">选择本地模型以查看类型和支持语言。文件完整不代表当前 native 构建支持推理。</div>
         <div class="tabstrip" role="tablist">
           <input type="radio" name="deck" id="tabAsr" checked>
           <label for="tabAsr" role="tab"><i class="tab-led"></i>ASR <span>语音识别</span></label>
@@ -107,7 +108,7 @@
           </div>
           <label class="field">
             <span>Family hint</span>
-            <input class="mono" id="asrFamily" type="text" value="citrinet_asr" spellcheck="false">
+            <input class="mono" id="asrFamily" type="text" spellcheck="false" placeholder="自动推断，可覆盖">
           </label>
           <label class="field">
             <span>Options JSON <em>可选，原生选项</em></span>
@@ -122,6 +123,17 @@
           </div>
         </section>
 
+        <section class="unit" id="deckMusic" hidden>
+          <h2>SONG STUDIO · 歌词生成歌曲</h2>
+          <label class="field"><span>歌词</span><textarea id="musicLyrics" rows="8" placeholder="输入分段歌词"></textarea></label>
+          <label class="field"><span>音乐风格 / 提示词</span><textarea id="musicStyle" rows="3" placeholder="曲风、乐器、情绪"></textarea></label>
+          <p>音乐任务尚未接入 Web 推理接口；此面板用于独立编辑，不会调用 TTS。</p>
+          <button class="btn" disabled>音乐生成暂不可运行</button>
+        </section>
+        <section class="unit" id="deckOther" hidden>
+          <h2>其他音频任务</h2>
+          <p>此任务尚无对应 Web 推理接口。不会将其模型发送到 ASR/TTS。</p>
+        </section>
         <!-- TTS unit -->
         <section class="unit" id="deckTts" hidden>
           <label class="field">
@@ -150,7 +162,7 @@
           </div>
           <label class="field">
             <span>Family hint</span>
-            <input class="mono" id="ttsFamily" type="text" value="qwen3_tts" spellcheck="false">
+            <input class="mono" id="ttsFamily" type="text" spellcheck="false" placeholder="自动推断，可覆盖">
           </label>
           <label class="field">
             <span>Options JSON <em>可选，原生选项</em></span>

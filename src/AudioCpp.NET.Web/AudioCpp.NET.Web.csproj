@@ -5,6 +5,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Content Include="..\..\..\audio.cpp\model_specs\*.json" Link="model_specs\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="..\AudioCpp.NET\AudioCpp.NET.csproj" />
   </ItemGroup>
 </Project>

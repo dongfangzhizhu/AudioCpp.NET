@@ -36,6 +36,12 @@ body {
 
 .mono { font-family: var(--mono); }
 .dim { color: var(--dim); }
+.model-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.model-list .mdl { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px 10px; align-items: center; }
+.model-list .name, .model-list .ggufs, .model-list .mdl-meta { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.model-list .name { font-weight: 700; }
+.model-list .mdl-meta { grid-column: 1 / -1; color: var(--teal); font-size: 11px; line-height: 1.35; }
+.model-capabilities { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #2c4a45; border-radius: 7px; color: var(--teal); background: rgba(87,199,184,.06); overflow-wrap: anywhere; }
 
 /* ── rack panels ── */
 .panel {
@@ -305,4 +311,25 @@ textarea { resize: vertical; min-height: 64px; font-family: var(--body); }
   .grid { grid-template-columns: 1fr; }
   .brand-sub { display: none; }
   .rack { padding: 14px; }
+}
+@media (max-width: 560px) { .rack { padding: 8px; } .panel { padding: 15px 14px; } .model-list { grid-template-columns: 1fr; } .model-list .mdl { grid-template-columns: 1fr auto; } .bay-tools { flex-wrap: wrap; } }
+
+/* Intrinsic sizing must not let long package names expand the rack. */
+[hidden] { display: none !important; }
+.grid > *, .col, .panel, .field { min-width: 0; }
+.model-list { grid-template-columns: minmax(0, 1fr); }
+.model-list .mdl { grid-template-columns: minmax(0, 1fr) auto; }
+.model-list .name, .model-list .ggufs, .model-list .mdl-meta { grid-column: 1 / -1; white-space: normal; }
+.model-list .mdl-badge { white-space: normal; line-height: 1.5; }
+.model-list .mdl:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.tabstrip, .brand-plate, h2, .bay-tools { flex-wrap: wrap; }
+.plate-status, .log, .pkg .id { overflow-wrap: anywhere; }
+.field input, .field textarea { max-width: 100%; }
+@media (max-width: 560px) {
+  .field-row { flex-wrap: wrap; }
+  .field-row > * { width: 100%; flex-basis: 100%; }
+  .pkg { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .panel { animation: none; opacity: 1; transform: none; }
 }

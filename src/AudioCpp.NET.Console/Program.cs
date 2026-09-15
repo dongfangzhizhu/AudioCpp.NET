@@ -144,16 +144,23 @@ internal static class ConsoleApp
         var audio = model.Synthesize(new TtsRequest
         {
             Text = text,
-            Task = "tts",
+            Task = Option(args, "--task") ?? "tts",
             ReferencePcm = reference?.Samples ?? ReadOnlyMemory<float>.Empty,
             ReferenceSampleRate = reference?.SampleRate ?? 0,
-            Options = reference is null || referenceText is null
-                ? null
-                : new Dictionary<string, string> { ["reference_text"] = referenceText }
+            Options = BuildTtsOptions(args, reference, referenceText)
         });
         WaveFile.Write(output, audio);
         Console.WriteLine($"Generated {output} ({audio.SampleRate} Hz, {audio.Channels} channel(s))");
         return 0;
+    }
+
+    private static IReadOnlyDictionary<string, string>? BuildTtsOptions(string[] args, AudioBuffer? reference, string? referenceText)
+    {
+        var options = new Dictionary<string, string>();
+        if (reference is not null && !string.IsNullOrWhiteSpace(referenceText)) options["reference_text"] = referenceText;
+        foreach (var (argument, key) in new[] { ("--style-language", "style_language"), ("--emotion", "emotion"), ("--speaking-rate", "speaking_rate"), ("--pitch-shift", "pitch_shift"), ("--energy-scale", "energy_scale") })
+            if (Option(args, argument) is { } value) options[key] = value;
+        return options.Count == 0 ? null : options;
     }
 
     private static async Task<int> VerifyAsync(AudioCppRuntime runtime, string[] args)

@@ -76,12 +76,17 @@ internal sealed class AudioCppWorkbench
                      .OrderBy(path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase))
         {
             var report = ModelValidator.Validate(dir);
+            var metadata = ModelMetadata.Resolve(report.PackageId);
             result.Add(new
             {
                 name = Path.GetFileName(dir),
                 path = Path.GetFullPath(dir),
                 models = Directory.EnumerateFiles(dir, "*.gguf").Select(Path.GetFileName).ToArray(),
                 packageId = report.PackageId,
+                metadata.Family,
+                metadata.Task,
+                metadata.Languages,
+                metadata.Tasks,
                 manifest = report.ManifestPresent,
                 complete = report.Complete,
                 issues = ModelValidator.FormatIssues(report)
@@ -132,8 +137,13 @@ internal sealed class AudioCppWorkbench
         var threads = Integer(form, "threads");
         using var runtime = CreateRuntime();
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = family, Threads = threads });
-        var text = model.Transcribe(new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate,
-            Channels = audio.Channels, Options = Options(form["options"]) });
+        var text = model.Transcribe(new AsrRequest
+        {
+            Audio = audio.Samples,
+            SampleRate = audio.SampleRate,
+            Channels = audio.Channels,
+            Options = Options(form["options"])
+        });
         return (object)new { text, audio.SampleRate, audio.Channels, samples = audio.Samples.Length };
     });
 
@@ -148,17 +158,34 @@ internal sealed class AudioCppWorkbench
         var family = Value(form, "family", "qwen3_tts");
         var options = new Dictionary<string, string>(Options(form["options"]) ?? new Dictionary<string, string>());
         var referenceText = Value(form, "referenceText", "");
+        var task = Value(form, "task", "tts");
+        var styleLanguage = Value(form, "styleLanguage", "");
+        var emotion = Value(form, "emotion", "");
+        if (styleLanguage.Length > 0) options["style_language"] = styleLanguage;
+        if (emotion.Length > 0) options["emotion"] = emotion;
         if (reference is not null && referenceText.Length > 0) options["reference_text"] = referenceText;
         using var runtime = CreateRuntime();
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = family, Threads = Integer(form, "threads") });
-        var audio = model.Synthesize(new TtsRequest { Text = text, Task = "tts",
+        var audio = model.Synthesize(new TtsRequest
+        {
+            Text = text,
+            Task = task,
             ReferencePcm = reference?.Samples ?? ReadOnlyMemory<float>.Empty,
-            ReferenceSampleRate = reference?.SampleRate ?? 0, Options = options });
+            ReferenceSampleRate = reference?.SampleRate ?? 0,
+            Options = options
+        });
         Directory.CreateDirectory(_artifactDirectory);
         var fileName = $"tts-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.wav";
         WaveFile.Write(Path.Combine(_artifactDirectory, fileName), audio);
-        return (object)new { audioUrl = $"/api/audio/{fileName}", fileName, audio.SampleRate, audio.Channels,
-            samples = audio.Samples.Length, duration = (double)audio.Samples.Length / audio.SampleRate / audio.Channels };
+        return (object)new
+        {
+            audioUrl = $"/api/audio/{fileName}",
+            fileName,
+            audio.SampleRate,
+            audio.Channels,
+            samples = audio.Samples.Length,
+            duration = (double)audio.Samples.Length / audio.SampleRate / audio.Channels
+        };
     });
 
     internal IResult GetAudio(string fileName)
@@ -169,7 +196,7 @@ internal sealed class AudioCppWorkbench
     }
 
     private AudioCppRuntime CreateRuntime() => AudioCppRuntime.Create(new AudioCppRuntimeOptions
-        { NativeLibraryPath = string.IsNullOrWhiteSpace(_configuration.NativePath) ? null : _configuration.NativePath });
+    { NativeLibraryPath = string.IsNullOrWhiteSpace(_configuration.NativePath) ? null : _configuration.NativePath });
     private string ResolveModelPath(string family, string standardDirectory)
     {
         var standard = Path.Combine(_configuration.ModelsDirectory, standardDirectory);

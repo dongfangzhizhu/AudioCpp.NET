@@ -6,7 +6,7 @@ namespace AudioCpp.NET;
 public sealed record AudioCppRuntimeOptions
 {
     public string? NativeLibraryPath { get; init; }
-    public string Backend { get; init; } = "cpu";
+    public string? Backend { get; init; }
 }
 
 public sealed record AudioCppModelOptions
@@ -26,6 +26,12 @@ public sealed record TtsRequest
     public ReadOnlyMemory<float> ReferencePcm { get; init; }
     public int ReferenceSampleRate { get; init; }
     public IReadOnlyDictionary<string, string>? Options { get; init; }
+    public string? Language { get; init; }
+    public string? Emotion { get; init; }
+    public float? SpeakingRate { get; init; }
+    public float? PitchShift { get; init; }
+    public float? EnergyScale { get; init; }
+    public IReadOnlyDictionary<string, string>? StyleTags { get; init; }
 }
 
 public sealed record AsrRequest
@@ -37,8 +43,32 @@ public sealed record AsrRequest
 }
 
 public sealed record AudioBuffer(ReadOnlyMemory<float> Samples, int SampleRate, int Channels);
+public sealed record AudioCppArtifact(string Id, string Kind, string PayloadHex, IReadOnlyDictionary<string, string> Meta);
+public sealed record AudioCppTaskResult(JsonElement RawJson)
+{
+    public string? Text => RawJson.TryGetProperty("text_output", out var value) ? value.GetString() : null;
+    public JsonElement NamedAudioOutputs => RawJson.GetProperty("named_audio_outputs");
+    public JsonElement SpeechSegments => RawJson.GetProperty("speech_segments");
+    public JsonElement SpeakerTurns => RawJson.GetProperty("speaker_turns");
+    public JsonElement WordTimestamps => RawJson.GetProperty("word_timestamps");
+    public JsonElement ArtifactOutput => RawJson.GetProperty("artifact_output");
+    public JsonElement OutputArtifacts => RawJson.GetProperty("output_artifacts");
+    public AudioCppArtifact? Artifact => ReadArtifact("artifact_output");
+    public IReadOnlyList<AudioCppArtifact> Artifacts => ReadArtifacts("output_artifacts");
+    private AudioCppArtifact? ReadArtifact(string name) => RawJson.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null ? ParseArtifact(value) : null;
+    private IReadOnlyList<AudioCppArtifact> ReadArtifacts(string name) => RawJson.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array ? value.EnumerateArray().Select(ParseArtifact).ToArray() : [];
+    private static AudioCppArtifact ParseArtifact(JsonElement value) => new(value.GetProperty("id").GetString() ?? "", value.GetProperty("kind").GetString() ?? "custom", value.GetProperty("payload_hex").GetString() ?? "", value.TryGetProperty("meta", out var meta) ? meta.EnumerateObject().ToDictionary(x => x.Name, x => x.Value.GetString() ?? "") : new Dictionary<string, string>());
+}
 
 public sealed record AudioCppBuildInfo(uint AbiMajor, uint AbiMinor, string ShimVersion, string AudioCppCommit, string Backend, ulong Capabilities);
+public static class AudioCppCapabilities
+{
+    public const ulong Synthesize = 1UL << 0;
+    public const ulong Transcribe = 1UL << 1;
+    public const ulong ModelManager = 1UL << 2;
+    public const ulong StructuredResults = 1UL << 3;
+    public const ulong Streaming = 1UL << 4;
+}
 public sealed record AudioCppLoader(string Family, string InstructionsPolicy, IReadOnlyList<string> ApiEndpoints,
     IReadOnlyList<AudioCppLoaderTask> Tasks, IReadOnlyList<string> Languages,
     bool SupportsSpeakerReference, bool SupportsStyleCondition, bool SupportsTimestamps);
@@ -62,7 +92,7 @@ public sealed class AudioCppRuntime : IDisposable
         var buildInfo = new AudioCppBuildInfo(info.AbiMajor, info.AbiMinor,
             info.ShimVersion, info.AudioCppCommit, info.Backend, info.Capabilities);
         if (buildInfo.AbiMajor != 1) throw new AudioCppAbiMismatchException($"Unsupported native ABI major {buildInfo.AbiMajor}; expected 1.");
-        if (!string.Equals(options.Backend, buildInfo.Backend, StringComparison.OrdinalIgnoreCase))
+        if (options.Backend is not null && !string.Equals(options.Backend, buildInfo.Backend, StringComparison.OrdinalIgnoreCase))
             throw new AudioCppAbiMismatchException($"Requested backend '{options.Backend}', but the native library provides '{buildInfo.Backend}'. Load the matching runtime package.");
         return new AudioCppRuntime(buildInfo);
     }
@@ -189,8 +219,15 @@ public sealed class AudioCppModel : IDisposable
         if (!request.ReferencePcm.IsEmpty && request.ReferenceSampleRate <= 0) throw new ArgumentException("ReferenceSampleRate must be positive when ReferencePcm is supplied.", nameof(request));
         try
         {
+            var options = new Dictionary<string, string>(request.Options ?? new Dictionary<string, string>());
+            if (request.Language is not null) options["style_language"] = request.Language;
+            if (request.Emotion is not null) options["emotion"] = request.Emotion;
+            if (request.SpeakingRate is not null) options["speaking_rate"] = request.SpeakingRate.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (request.PitchShift is not null) options["pitch_shift"] = request.PitchShift.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (request.EnergyScale is not null) options["energy_scale"] = request.EnergyScale.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (request.StyleTags is not null) foreach (var tag in request.StyleTags) options[$"style_tag_{tag.Key}"] = tag.Value;
             var result = InteropOperations.Synthesize(_handle, request.Task, request.Text, request.VoiceId,
-                request.ReferencePcm.Span, request.ReferenceSampleRate, AudioCppRuntime.ToJson(request.Options));
+                request.ReferencePcm.Span, request.ReferenceSampleRate, AudioCppRuntime.ToJson(options));
             return new AudioBuffer(result.Samples, result.SampleRate, result.Channels);
         }
         catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
@@ -214,6 +251,18 @@ public sealed class AudioCppModel : IDisposable
         {
             throw new AudioCppInferenceException(exception.Message, exception);
         }
+    }
+
+    public AudioCppTaskResult Run(TtsRequest? request = null, AsrRequest? audioRequest = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var text = request?.Text;
+        var audio = audioRequest?.Audio ?? ReadOnlyMemory<float>.Empty;
+        var json = InteropOperations.RunJson(_handle, request?.Task, text, audio.Span,
+            audioRequest?.SampleRate ?? 0, audioRequest?.Channels ?? 0, request?.VoiceId,
+            request is null ? ReadOnlySpan<float>.Empty : request.ReferencePcm.Span, request?.ReferenceSampleRate ?? 0,
+            AudioCppRuntime.ToJson(request?.Options));
+        return new AudioCppTaskResult(JsonDocument.Parse(json).RootElement.Clone());
     }
 
     public void Dispose()

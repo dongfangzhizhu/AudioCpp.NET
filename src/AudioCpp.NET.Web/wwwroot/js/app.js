@@ -2,6 +2,27 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+let localModels = [];
+const taskDecks = { asr: "deckAsr", tts: "deckTts", music: "deckMusic", other: "deckOther" };
+function showTask(task) {
+  const active = taskDecks[task] ? task : "other";
+  for (const [key, id] of Object.entries(taskDecks)) $(id).hidden = key !== active;
+  $("tabAsr").checked = active === "asr";
+  $("tabTts").checked = active === "tts";
+}
+function describeModel(entry) {
+  $("modelCapabilities").textContent = entry
+    ? `${entry.name} · ${entry.task} · Family: ${entry.family || "未知（可手动填写）"} · 支持语言（规格声明）: ${(entry.languages || []).join(", ") || "未知"} · 任务: ${(entry.tasks || []).join(", ")}。文件完整不代表 native 支持推理。`
+    : "未匹配本地模型：Family 可手动填写，留空由运行时推断。";
+}
+for (const task of ["asr", "tts"]) {
+  $(task + "ModelPath").addEventListener("input", () => {
+    const path = $(task + "ModelPath").value.trim().replaceAll("\\", "/").toLowerCase();
+    const entry = localModels.find(m => m.path.replaceAll("\\", "/").toLowerCase() === path);
+    $(task + "Family").value = entry?.family || "";
+    describeModel(entry);
+  });
+}
 
 async function api(path, options) {
   let response;
@@ -141,6 +162,8 @@ $("refreshPackages").addEventListener("click", loadPackages);
 async function loadModels() {
   try {
     const models = await api("/api/models");
+    localModels = models;
+    models.sort((a, b) => (a.task || "unknown").localeCompare(b.task || "unknown") || a.name.localeCompare(b.name));
     $("modelCount").textContent = `${models.length} folders`;
     const list = $("modelList");
     list.replaceChildren();
@@ -158,17 +181,34 @@ async function loadModels() {
       badge.className = entry.manifest === false ? "mdl-badge raw" : (entry.complete ? "mdl-badge ok" : "mdl-badge bad");
       badge.textContent = entry.manifest === false ? "unmanaged" : (entry.complete ? "✓ complete" : "✗ incomplete");
       badge.title = entry.issues || "package manifest verification";
+      const meta = document.createElement("span");
+      meta.className = "mdl-meta";
+      const taskLabels = { asr: "语音识别", tts: "语音合成", music: "歌词/音乐生成", unknown: "未识别任务" };
+      meta.textContent = `${taskLabels[entry.task] || taskLabels.unknown} · ${(entry.family || "待推断")} · ${(entry.languages || []).join(", ") || "语言未知"}`;
       const verify = document.createElement("button");
       verify.className = "btn btn-mini";
       verify.type = "button";
       verify.textContent = "VERIFY";
       verify.addEventListener("click", (event) => { event.stopPropagation(); verifyModel(entry.path, verify); });
-      item.append(name, ggufs, badge, verify);
+      item.append(name, meta, ggufs, badge, verify);
       item.addEventListener("click", () => {
-        const target = $("tabTts").checked ? "ttsModelPath" : "asrModelPath";
+        showTask(entry.task);
+        describeModel(entry);
+        list.querySelectorAll(".mdl").forEach(node => node.classList.toggle("selected", node === item));
+        if (!["asr", "tts"].includes(entry.task)) return;
+        const target = entry.task + "ModelPath";
         $(target).value = entry.path;
+        const familyTarget = target === "ttsModelPath" ? "ttsFamily" : "asrFamily";
+        $(familyTarget).value = entry.family || "";
+        const cap = $("modelCapabilities");
+        cap.hidden = false;
+        describeModel(entry);
         list.querySelectorAll(".mdl").forEach((node) => node.classList.toggle("selected", node === item));
         log("info", `${entry.name} → ${target === "ttsModelPath" ? "TTS" : "ASR"} 模型路径`);
+      });
+      item.tabIndex = 0;
+      item.addEventListener("keydown", event => {
+        if (event.target === item && ["Enter", " "].includes(event.key)) { event.preventDefault(); item.click(); }
       });
       list.append(item);
     }
@@ -208,9 +248,9 @@ async function verifyModel(path, button) {
 
 /* ── tabs ── */
 function syncDecks() {
-  const tts = $("tabTts").checked;
-  $("deckAsr").hidden = tts;
-  $("deckTts").hidden = !tts;
+  const task = $("tabTts").checked ? "tts" : "asr";
+  showTask(task);
+  describeModel(localModels.find(m => m.path === $(task + "ModelPath").value));
 }
 $("tabAsr").addEventListener("change", syncDecks);
 $("tabTts").addEventListener("change", syncDecks);
