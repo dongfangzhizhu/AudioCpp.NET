@@ -3,19 +3,19 @@
 
 const $ = (id) => document.getElementById(id);
 let localModels = [];
-const taskDecks = { asr: "deckAsr", tts: "deckTts", music: "deckMusic", other: "deckOther" };
+const taskDecks = { asr: "deckAsr", tts: "deckTts", stream: "deckStream", music: "deckMusic", other: "deckOther" };
+const taskTabs = { asr: "tabAsr", tts: "tabTts", stream: "tabStream" };
 function showTask(task) {
   const active = taskDecks[task] ? task : "other";
   for (const [key, id] of Object.entries(taskDecks)) $(id).hidden = key !== active;
-  $("tabAsr").checked = active === "asr";
-  $("tabTts").checked = active === "tts";
+  for (const [key, id] of Object.entries(taskTabs)) $(id).checked = key === active;
 }
 function describeModel(entry) {
   $("modelCapabilities").textContent = entry
     ? `${entry.name} · ${entry.task} · Family: ${entry.family || "未知（可手动填写）"} · 支持语言（规格声明）: ${(entry.languages || []).join(", ") || "未知"} · 任务: ${(entry.tasks || []).join(", ")}。文件完整不代表 native 支持推理。`
     : "未匹配本地模型：Family 可手动填写，留空由运行时推断。";
 }
-for (const task of ["asr", "tts"]) {
+for (const task of ["asr", "tts", "stream"]) {
   $(task + "ModelPath").addEventListener("input", () => {
     const path = $(task + "ModelPath").value.trim().replaceAll("\\", "/").toLowerCase();
     const entry = localModels.find(m => m.path.replaceAll("\\", "/").toLowerCase() === path);
@@ -248,12 +248,11 @@ async function verifyModel(path, button) {
 
 /* ── tabs ── */
 function syncDecks() {
-  const task = $("tabTts").checked ? "tts" : "asr";
+  const task = Object.keys(taskTabs).find(key => $(taskTabs[key]).checked) || "asr";
   showTask(task);
   describeModel(localModels.find(m => m.path === $(task + "ModelPath").value));
 }
-$("tabAsr").addEventListener("change", syncDecks);
-$("tabTts").addEventListener("change", syncDecks);
+for (const tab of Object.values(taskTabs)) $(tab).addEventListener("change", syncDecks);
 
 /* ── dropzones ── */
 function wireDropzone(zoneId, inputId, nameId, clearId) {
@@ -288,6 +287,7 @@ function wireDropzone(zoneId, inputId, nameId, clearId) {
 }
 wireDropzone("asrDrop", "asrFile", "asrFileName", "asrClear");
 wireDropzone("ttsRefDrop", "ttsRefFile", "ttsRefName", "ttsRefClear");
+wireDropzone("streamDrop", "streamFile", "streamFileName", "streamClear");
 
 /* ── inference runs ── */
 function formExtras(form, optionsId, threadsId, familyId) {
@@ -364,6 +364,86 @@ $("ttsRun").addEventListener("click", () => {
       $("resDownload").href = result.audioUrl;
       $("resDownload").download = result.fileName;
       $("resultPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    },
+  });
+});
+
+/* ── streaming deck ── */
+function streamPolicyLine(policy, family, task) {
+  const seconds = policy.preferredChunkSeconds ? ` (${policy.preferredChunkSeconds}s)` : "";
+  return `${family} · ${task} · ${policy.input}/${policy.output} · preferred chunk ${policy.preferredChunkSamples} samples${seconds}`;
+}
+
+function renderStreamEvents(result) {
+  const lines = [];
+  for (const event of result.events || []) {
+    const at = `@${event.offset}`;
+    if (event.partialText) lines.push(`${at}  partial  ${event.partialText}`);
+    for (const activity of event.voiceActivity || []) {
+      const span = activity.segment ? ` seg=[${activity.segment.startSample}–${activity.segment.endSample}]` : "";
+      lines.push(`${at}  voice    ${activity.kind} @ ${activity.sample} p=${(activity.probability ?? 0).toFixed(2)}${span}`);
+    }
+    for (const turn of event.speakerTurns || []) {
+      lines.push(`${at}  speaker  ${turn.speakerId} [${turn.startSample}–${turn.endSample}] p=${(turn.confidence ?? 0).toFixed(2)}`);
+    }
+    for (const word of event.wordTimestamps || []) {
+      lines.push(`${at}  word     ${word.word} [${word.startSample}–${word.endSample}]`);
+    }
+    for (const artifact of event.artifacts || []) {
+      lines.push(`${at}  artifact ${artifact.id} kind=${artifact.kind} bytes=${artifact.bytes}`);
+    }
+    if (event.isFinal) lines.push(`${at}  final`);
+  }
+  return lines.join("\n");
+}
+
+$("streamProbe").addEventListener("click", async () => {
+  const modelPath = $("streamModelPath").value.trim();
+  if (!modelPath) { showError("请先填写流式模型目录（Model path）。"); return; }
+  const button = $("streamProbe");
+  button.disabled = true;
+  try {
+    const query = new URLSearchParams({
+      modelPath,
+      family: $("streamFamily").value.trim(),
+      task: $("streamTask").value.trim() || "vad",
+    });
+    const policy = await api(`/api/stream/policy?${query}`);
+    $("streamOutWrap").hidden = false;
+    $("streamPolicy").textContent = streamPolicyLine(policy, policy.family, policy.task);
+    log("ok", `stream policy ${policy.family} ${policy.input}/${policy.output} · chunk=${policy.preferredChunkSamples}`);
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("streamRun").addEventListener("click", () => {
+  const file = $("streamFile").files[0];
+  if (!file) { showError("请先选择要流式处理的 WAV 文件。"); return; }
+  runDeck($("streamRun"), () => {
+    const form = new FormData();
+    form.append("audio", file);
+    form.append("modelPath", $("streamModelPath").value.trim());
+    form.append("task", $("streamTask").value.trim() || "vad");
+    const chunkMs = $("streamChunkMs").value.trim();
+    if (chunkMs) form.append("chunkMs", chunkMs);
+    formExtras(form, "streamOptions", "streamThreads", "streamFamily");
+    return form;
+  }, {
+    endpoint: "/api/stream",
+    message: (result) => `流式完成：${result.chunks} 块 / ${result.contentEventCount} 事件（共 ${result.eventCount} 次轮询）/ ${result.segments.length} 语音段` +
+      (result.paddedTailSamples ? ` · 尾部补零 ${result.paddedTailSamples} samples` : ""),
+    render: (result) => {
+      $("streamOutWrap").hidden = false;
+      $("streamPolicy").textContent = `${streamPolicyLine(result.policy, result.family, result.task)}\n` +
+        `chunk ${result.chunkSamples} samples · ${result.chunks} chunks · ${result.samples} samples @ ${result.sampleRate} Hz · ${result.channels}ch` +
+        (result.paddedTailSamples ? ` · tail padded ${result.paddedTailSamples} samples` : "");
+      $("streamEvents").textContent = renderStreamEvents(result) || "（无流式事件）";
+      $("streamSegments").textContent = (result.segments || [])
+        .map((segment) => `[${segment.startSample}–${segment.endSample}] ${(segment.confidence ?? 0).toFixed(2)} ${segment.text || ""}`)
+        .join("\n") || "（未检测到语音段）";
     },
   });
 });

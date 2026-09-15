@@ -164,4 +164,56 @@ public sealed class AudioCppStreamingTests
         Assert.Throws<ArgumentNullException>(() => AudioCppStreaming.Run(null!, new float[1],
             new AudioCppStreamingOptions { Task = "vad", SampleRate = 16000 }));
     }
+
+    [Fact]
+    public void EventBatchKeepsChunkOffset()
+    {
+        var parsed = AudioCppStreamEvent.Parse("{\"events\":[{}]}");
+        var batch = new AudioCppStreamEventBatch(1024, parsed[0]);
+        Assert.Equal(1024, batch.ChunkOffset);
+        Assert.Null(batch.Event.PartialText);
+    }
+
+    [Fact]
+    public void StreamEventsReportWhetherTheyCarriedContent()
+    {
+        var events = AudioCppStreamEvent.Parse("""
+            {"events":[
+              {"partial_text":null,"voice_activity":[],"audio_output":null,"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":false},
+              {"partial_text":{"text":"hi"},"voice_activity":[],"audio_output":null,"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":false},
+              {"partial_text":null,"voice_activity":[{"kind":"speech_start","sample":0,"probability":0.5,"segment":null}],"audio_output":null,"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":false},
+              {"partial_text":null,"voice_activity":[],"audio_output":null,"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":true}
+            ]}
+            """);
+
+        Assert.False(events[0].HasContent);
+        Assert.True(events[1].HasContent);
+        Assert.True(events[2].HasContent);
+        Assert.False(events[3].HasContent);
+    }
+
+    [Fact]
+    public void StreamReportFiltersEmptyPollEvents()
+    {
+        var events = AudioCppStreamEvent.Parse("""
+            {"events":[
+              {"partial_text":null,"voice_activity":[],"audio_output":null,"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":false},
+              {"partial_text":{"text":"hi"},"voice_activity":[],"audio_output":null,"speaker_turns":[],"word_timestamps":[],"output_artifacts":[],"is_final":true}
+            ]}
+            """);
+        using var document = System.Text.Json.JsonDocument.Parse("{}");
+        var batches = new[]
+        {
+            new AudioCppStreamEventBatch(0, events[0]),
+            new AudioCppStreamEventBatch(512, events[1]),
+        };
+        var report = new AudioCppStreamReport(
+            new AudioCppStreamInfo("silero_vad", "vad", Policy(512)), 512, [], batches,
+            new AudioCppTaskResult(document.RootElement.Clone()));
+
+        Assert.Equal(2, report.Events.Count);
+        var content = Assert.Single(report.ContentEvents);
+        Assert.Equal(512, content.ChunkOffset);
+        Assert.Equal("hi", content.Event.PartialText);
+    }
 }

@@ -421,6 +421,14 @@ public sealed record AudioCppStreamEvent(
         value.TryGetProperty("probability", out var probability) && probability.ValueKind == JsonValueKind.Number ? probability.GetSingle() : 0f,
         value.TryGetProperty("segment", out var segment) && segment.ValueKind == JsonValueKind.Object
             ? AudioCppTaskResult.ParseSpeechSegment(segment) : null);
+
+    /// <summary>
+    /// True when the event carried something other than the empty poll envelope that
+    /// loaders emit for every chunk they consume.
+    /// </summary>
+    public bool HasContent =>
+        PartialText is not null || !string.IsNullOrEmpty(Language) || VoiceActivity.Count > 0 ||
+        AudioOutput is not null || SpeakerTurns.Count > 0 || WordTimestamps.Count > 0 || Artifacts.Count > 0;
 }
 
 /// <summary>

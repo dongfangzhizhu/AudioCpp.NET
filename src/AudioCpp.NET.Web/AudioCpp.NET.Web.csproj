@@ -6,6 +6,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="..\..\..\audio.cpp\model_specs\*.json" Link="model_specs\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- Non-Development hosts serve wwwroot from disk, so ship it next to the executable. -->
+    <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="..\AudioCpp.NET\AudioCpp.NET.csproj" />
   </ItemGroup>
 </Project>

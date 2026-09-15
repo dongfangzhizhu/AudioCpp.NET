@@ -30,6 +30,9 @@ public sealed record AudioCppStreamReport(
 {
     public int PaddedTailSamples => Chunks.Count == 0 ? 0 : Chunks[^1].PaddedSamples;
     public bool PaddedTail => PaddedTailSamples > 0;
+
+    /// <summary>Events that carried a payload; the empty per-chunk polls are dropped.</summary>
+    public IReadOnlyList<AudioCppStreamEventBatch> ContentEvents => Events.Where(batch => batch.Event.HasContent).ToArray();
 }
 
 /// <summary>

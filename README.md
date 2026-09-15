@@ -116,6 +116,21 @@ Every detected model shows a completeness badge (`✓ complete` / `✗ incomplet
 demand (`POST /api/verify`). A failed install reports the missing files
 directly in the studio log.
 
+The **VAD STREAM** deck streams an uploaded WAV through a streaming session
+(`POST /api/stream`). It reports the negotiated policy, the chunk size actually
+used, how many samples were zero-padded to keep a fixed-size window aligned, and
+one line per event tagged with the offset of the chunk that produced it, followed
+by the final speech segments. **PROBE POLICY**
+(`GET /api/stream/policy?modelPath=…`) opens a session without pushing audio and
+returns the same `input`/`output` policy and preferred chunk size, which is the
+cheapest way to check whether a directory can stream at all. Streaming needs a
+loader that advertises a `streaming` mode for the requested task (in this pinned
+build only `silero_vad`), and that loader accepts 16 kHz input only.
+
+The workbench serves `wwwroot` from the output directory, so run the built
+executable from its own folder (or use `dotnet run`, which sets the content root
+to the project).
+
 ```powershell
 # Optional pre-configuration; every field stays editable in the UI
 $env:AUDIOCPP_NATIVE_PATH = ".\build\native-verify\Release\audiocpp_dotnet_native.dll"

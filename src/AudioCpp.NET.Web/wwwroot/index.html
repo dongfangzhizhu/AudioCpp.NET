@@ -83,6 +83,8 @@
           <label for="tabAsr" role="tab"><i class="tab-led"></i>ASR <span>语音识别</span></label>
           <input type="radio" name="deck" id="tabTts">
           <label for="tabTts" role="tab"><i class="tab-led"></i>TTS <span>语音合成</span></label>
+          <input type="radio" name="deck" id="tabStream">
+          <label for="tabStream" role="tab"><i class="tab-led"></i>VAD STREAM <span>流式检测</span></label>
         </div>
 
         <!-- ASR unit -->
@@ -126,6 +128,56 @@
               <h3>WORD TIMESTAMPS <span class="h2-cn">词级时间戳</span></h3>
               <pre class="mono" id="asrWords"></pre>
             </div>
+          </div>
+        </section>
+
+        <!-- streaming unit -->
+        <section class="unit" id="deckStream" hidden>
+          <div class="dropzone slim" id="streamDrop">
+            <input type="file" id="streamFile" accept=".wav,audio/wav" hidden>
+            <p><strong>Drop PCM16 WAV here</strong> / 整段音频按会话策略分块推入流式接口</p>
+            <p class="dz-file mono" id="streamFileName" hidden></p>
+            <button class="btn btn-mini" id="streamClear" type="button" hidden>✕ clear</button>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Model path <em>流式模型目录</em></span>
+              <input class="mono" id="streamModelPath" type="text" spellcheck="false" placeholder="Silero-VAD">
+            </label>
+            <label class="field w-sm">
+              <span>Threads</span>
+              <input class="mono" id="streamThreads" type="number" min="0" placeholder="auto">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Task <em>流式任务</em></span>
+              <input class="mono" id="streamTask" type="text" spellcheck="false" placeholder="vad">
+            </label>
+            <label class="field w-sm">
+              <span>Chunk ms</span>
+              <input class="mono" id="streamChunkMs" type="number" min="1" placeholder="100">
+            </label>
+          </div>
+          <label class="field">
+            <span>Family hint</span>
+            <input class="mono" id="streamFamily" type="text" spellcheck="false" placeholder="自动推断，可覆盖">
+          </label>
+          <label class="field">
+            <span>Options JSON <em>可选，原生选项</em></span>
+            <input class="mono" id="streamOptions" type="text" spellcheck="false" placeholder='{"key":"value"}'>
+          </label>
+          <div class="run-row">
+            <button class="btn btn-mini" id="streamProbe" type="button">⟳ PROBE POLICY</button>
+            <button class="btn btn-run" id="streamRun">▶ RUN STREAM<span class="vu"><i></i><i></i><i></i><i></i><i></i></span></button>
+          </div>
+          <div class="readout" id="streamOutWrap" hidden>
+            <h3>STREAM POLICY <span class="h2-cn">流式策略</span></h3>
+            <pre class="mono" id="streamPolicy"></pre>
+            <h3>EVENTS <span class="h2-cn">流式事件</span></h3>
+            <pre class="mono" id="streamEvents"></pre>
+            <h3>SEGMENTS <span class="h2-cn">语音分段</span></h3>
+            <pre class="mono" id="streamSegments"></pre>
           </div>
         </section>
 

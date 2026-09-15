@@ -3,7 +3,6 @@ using AudioCpp.NET;
 using Microsoft.AspNetCore.Http.Features;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.WebHost.UseWebRoot("wwwroot");
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 64 * 1024 * 1024);
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 32 * 1024 * 1024);
 builder.Services.AddSingleton<AudioCppWorkbench>();
@@ -22,13 +21,15 @@ app.MapPost("/api/packages/download", (DownloadRequest request, AudioCppWorkbenc
 app.MapPost("/api/verify", (VerifyRequest request, AudioCppWorkbench workbench) =>
     workbench.VerifyModelAsync(request));
 app.MapPost("/api/asr", (HttpRequest request, AudioCppWorkbench workbench) => workbench.TranscribeAsync(request));
+app.MapPost("/api/stream", (HttpRequest request, AudioCppWorkbench workbench) => workbench.StreamAsync(request));
+app.MapGet("/api/stream/policy", (HttpRequest request, AudioCppWorkbench workbench) => workbench.ProbeStreamAsync(request));
 app.MapPost("/api/tts", (HttpRequest request, AudioCppWorkbench workbench) => workbench.SynthesizeAsync(request));
 app.MapGet("/api/audio/{fileName}", (string fileName, AudioCppWorkbench workbench) => workbench.GetAudio(fileName));
 
 app.UseExceptionHandler(handler => handler.Run(async context =>
 {
     var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
-    context.Response.StatusCode = error is ArgumentException or InvalidDataException or AudioCppModelIncompleteException ? 400 : 500;
+    context.Response.StatusCode = error is ArgumentException or InvalidDataException or AudioCppModelIncompleteException or NotSupportedException ? 400 : 500;
     await context.Response.WriteAsJsonAsync(new { error = error?.Message ?? "Unknown server error." });
 }));
 
@@ -154,13 +155,7 @@ internal sealed class AudioCppWorkbench
                 audio.Channels,
                 samples = audio.Samples.Length,
                 structured = true,
-                segments = structured.SpeechSegments.Select(segment => new
-                {
-                    startSample = segment.Span.StartSample,
-                    endSample = segment.Span.EndSample,
-                    confidence = segment.Confidence,
-                    text = segment.Text
-                }).ToArray(),
+                segments = structured.SpeechSegments.Select(ParseSegment).ToArray(),
                 words = structured.WordTimestamps.Select(word => new
                 {
                     startSample = word.Span.StartSample,
@@ -184,6 +179,129 @@ internal sealed class AudioCppWorkbench
             return (object)new { text, audio.SampleRate, audio.Channels, samples = audio.Samples.Length, structured = false };
         }
     });
+
+    internal async Task<object> StreamAsync(HttpRequest request) => await Locked(async () =>
+    {
+        var form = await request.ReadFormAsync();
+        var upload = form.Files.GetFile("audio") ?? throw new ArgumentException("A PCM16 WAV file is required.");
+        var audio = ReadWave(upload);
+        var family = Value(form, "family", "silero_vad");
+        var task = Value(form, "task", "vad");
+        var modelPath = Value(form, "modelPath", "");
+        if (modelPath.Length == 0)
+        {
+            var standard = Path.Combine(_configuration.ModelsDirectory, "Silero-VAD");
+            if (!Directory.Exists(standard))
+                throw new ArgumentException("Streaming probes need an explicit modelPath; no Silero-VAD package is installed.");
+            modelPath = standard;
+        }
+        var chunkMilliseconds = Integer(form, "chunkMs");
+        if (chunkMilliseconds <= 0) chunkMilliseconds = AudioCppStreaming.DefaultChunkMilliseconds;
+        using var runtime = CreateRuntime();
+        using var model = runtime.LoadModel(new AudioCppModelOptions
+        {
+            ModelPath = modelPath,
+            FamilyHint = family,
+            Threads = Integer(form, "threads"),
+        });
+        var report = AudioCppStreaming.Run(model, audio.Samples, new AudioCppStreamingOptions
+        {
+            Task = task,
+            SampleRate = audio.SampleRate,
+            Channels = audio.Channels,
+            ChunkMilliseconds = chunkMilliseconds,
+            Options = Options(form["options"]),
+        });
+        return (object)new
+        {
+            family = report.Info.Family,
+            task = report.Info.Task,
+            policy = new
+            {
+                input = report.Info.Policy.Input,
+                output = report.Info.Policy.Output,
+                preferredChunkSamples = report.Info.Policy.PreferredChunkSamples,
+                preferredChunkSeconds = report.Info.Policy.PreferredChunkSeconds,
+            },
+            chunkSamples = report.ChunkSamples,
+            chunks = report.Chunks.Count,
+            eventCount = report.Events.Count,
+            contentEventCount = report.ContentEvents.Count,
+            paddedTailSamples = report.PaddedTailSamples,
+            audio.SampleRate,
+            audio.Channels,
+            samples = audio.Samples.Length,
+            events = report.ContentEvents.Select(StreamEvent).ToArray(),
+            segments = report.Result.SpeechSegments.Select(ParseSegment).ToArray(),
+            words = report.Result.WordTimestamps.Count,
+        };
+    });
+
+    internal async Task<object> ProbeStreamAsync(HttpRequest request) => await Locked(() =>
+    {
+        var query = request.Query;
+        var family = Query(query, "family", "silero_vad");
+        var task = Query(query, "task", "vad");
+        var modelPath = Query(query, "modelPath", "");
+        if (modelPath.Length == 0) throw new ArgumentException("modelPath is required to probe a streaming policy.");
+        if (!Directory.Exists(modelPath)) throw new ArgumentException($"Model directory does not exist: {Path.GetFullPath(modelPath)}");
+        using var runtime = CreateRuntime();
+        using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = family });
+        using var session = model.StartStreaming(task);
+        return (object)new
+        {
+            family = session.Info.Family,
+            task = session.Info.Task,
+            input = session.Info.Policy.Input,
+            output = session.Info.Policy.Output,
+            preferredChunkSamples = session.Info.Policy.PreferredChunkSamples,
+            preferredChunkSeconds = session.Info.Policy.PreferredChunkSeconds,
+        };
+    });
+
+    private static object StreamEvent(AudioCppStreamEventBatch batch) => new
+    {
+        offset = batch.ChunkOffset,
+        isFinal = batch.Event.IsFinal,
+        partialText = batch.Event.PartialText,
+        language = batch.Event.Language,
+        voiceActivity = batch.Event.VoiceActivity.Select(activity => new
+        {
+            kind = activity.Kind,
+            sample = activity.Sample,
+            probability = activity.Probability,
+            segment = activity.Segment is null ? null : ParseSegment(activity.Segment),
+        }).ToArray(),
+        speakerTurns = batch.Event.SpeakerTurns.Select(turn => new
+        {
+            startSample = turn.Span.StartSample,
+            endSample = turn.Span.EndSample,
+            confidence = turn.Confidence,
+            speakerId = turn.SpeakerId,
+            text = turn.Text,
+        }).ToArray(),
+        wordTimestamps = batch.Event.WordTimestamps.Select(word => new
+        {
+            startSample = word.Span.StartSample,
+            endSample = word.Span.EndSample,
+            confidence = word.Confidence,
+            word = word.Word,
+        }).ToArray(),
+        artifacts = batch.Event.Artifacts.Select(artifact => new
+        {
+            id = artifact.Id,
+            kind = artifact.Kind,
+            bytes = artifact.PayloadHex.Length / 2,
+        }).ToArray(),
+    };
+
+    private static object ParseSegment(AudioCppSpeechSegment segment) => new
+    {
+        startSample = segment.Span.StartSample,
+        endSample = segment.Span.EndSample,
+        confidence = segment.Confidence,
+        text = segment.Text,
+    };
 
     internal async Task<object> SynthesizeAsync(HttpRequest request) => await Locked(async () =>
     {
@@ -256,6 +374,8 @@ internal sealed class AudioCppWorkbench
     }
     private static string Value(IFormCollection form, string name, string fallback) =>
         string.IsNullOrWhiteSpace(form[name]) ? fallback : form[name].ToString().Trim();
+    private static string Query(IQueryCollection query, string name, string fallback) =>
+        string.IsNullOrWhiteSpace(query[name]) ? fallback : query[name].ToString().Trim();
     private static int Integer(IFormCollection form, string name) => int.TryParse(form[name], out var value) && value >= 0 ? value : 0;
     private static IReadOnlyDictionary<string, string>? Options(string? value)
     {
