@@ -128,8 +128,9 @@ internal static class ConsoleApp
         var request = new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels };
         if (HasFlag(args, "--stream"))
         {
-            return StreamAudio(model, audio, Option(args, "--task") ?? "asr",
-                Option(args, "--chunk-ms") is { } chunkMs ? int.Parse(chunkMs) : 100);
+            if (ChunkMilliseconds(args) is not { } streamChunkMilliseconds)
+                return Fail("--chunk-ms must be a positive integer.");
+            return StreamAudio(model, audio, Option(args, "--task") ?? "asr", streamChunkMilliseconds);
         }
         if (HasFlag(args, "--structured"))
         {
@@ -161,52 +162,53 @@ internal static class ConsoleApp
             ModelPath = Option(args, "--model")!,
             FamilyHint = Option(args, "--family"),
         });
-        return StreamAudio(model, audio, "vad",
-            Option(args, "--chunk-ms") is { } chunkMs ? int.Parse(chunkMs) : 100);
+        if (ChunkMilliseconds(args) is not { } chunkMilliseconds)
+            return Fail("--chunk-ms must be a positive integer.");
+        return StreamAudio(model, audio, "vad", chunkMilliseconds);
     }
 
     private static int StreamAudio(AudioCppModel model, AudioBuffer audio, string task, int chunkMilliseconds)
     {
-        using var stream = model.StartStreaming(task);
-        var policy = stream.Info.Policy;
-        var chunkSamples = policy.PreferredChunkSamples > 0
-            ? (int)Math.Min(policy.PreferredChunkSamples, int.MaxValue)
-            : Math.Max(1, audio.SampleRate * chunkMilliseconds / 1000);
-        Console.WriteLine($"streaming family={stream.Info.Family} task={stream.Info.Task} " +
-                          $"policy={policy.Input}/{policy.Output} chunk={chunkSamples} samples");
-        var samples = audio.Samples.Span;
-        for (var offset = 0; offset < samples.Length; offset += chunkSamples)
-        {
-            var length = Math.Min(chunkSamples, samples.Length - offset);
-            float[] chunk;
-            if (length < chunkSamples && policy.PreferredChunkSamples > 0)
+        var report = AudioCppStreaming.Run(model, audio.Samples,
+            new AudioCppStreamingOptions
             {
-                // Models that demand fixed-size chunks (e.g. Silero's 512-sample
-                // window) receive a zero-padded tail so the stream stays aligned.
-                chunk = new float[chunkSamples];
-                samples.Slice(offset, length).CopyTo(chunk);
-            }
-            else
-            {
-                chunk = samples.Slice(offset, length).ToArray();
-            }
-            foreach (var streamEvent in stream.PushPcm(chunk, audio.SampleRate, audio.Channels))
-            {
-                if (streamEvent.PartialText is not null) Console.WriteLine($"partial {streamEvent.PartialText}");
-                foreach (var activity in streamEvent.VoiceActivity)
-                {
-                    var span = activity.Segment is null ? "" : $" [{activity.Segment.Span.StartSample}..{activity.Segment.Span.EndSample}]";
-                    Console.WriteLine($"voice {activity.Kind} @ {activity.Sample} p={activity.Probability:F2}{span}");
-                }
-                foreach (var turn in streamEvent.SpeakerTurns)
-                    Console.WriteLine($"speaker [{turn.Span.StartSample}..{turn.Span.EndSample}] {turn.SpeakerId} {turn.Confidence:F2}");
-            }
-        }
-        var final = stream.Finish();
-        Console.WriteLine($"final {final.Text ?? ""}");
-        foreach (var segment in final.SpeechSegments)
+                Task = task,
+                SampleRate = audio.SampleRate,
+                Channels = audio.Channels,
+                ChunkMilliseconds = chunkMilliseconds,
+            },
+            onStarted: (info, chunkSamples) => Console.WriteLine(
+                $"streaming family={info.Family} task={info.Task} policy={info.Policy.Input}/{info.Policy.Output} " +
+                $"chunk={chunkSamples} samples"),
+            onEvent: batch => WriteStreamEvent(batch.Event));
+        if (report.PaddedTail)
+            Console.WriteLine($"padded tail {report.PaddedTailSamples} samples to keep {report.ChunkSamples}-sample alignment");
+        Console.WriteLine($"final {report.Result.Text ?? ""}");
+        foreach (var segment in report.Result.SpeechSegments)
             Console.WriteLine($"segment [{segment.Span.StartSample}..{segment.Span.EndSample}] {segment.Confidence:F2} {segment.Text}");
         return 0;
+    }
+
+    private static void WriteStreamEvent(AudioCppStreamEvent streamEvent)
+    {
+        if (streamEvent.PartialText is not null) Console.WriteLine($"partial {streamEvent.PartialText}");
+        foreach (var activity in streamEvent.VoiceActivity)
+        {
+            var span = activity.Segment is null ? "" : $" [{activity.Segment.Span.StartSample}..{activity.Segment.Span.EndSample}]";
+            Console.WriteLine($"voice {activity.Kind} @ {activity.Sample} p={activity.Probability:F2}{span}");
+        }
+        foreach (var turn in streamEvent.SpeakerTurns)
+            Console.WriteLine($"speaker [{turn.Span.StartSample}..{turn.Span.EndSample}] {turn.SpeakerId} {turn.Confidence:F2}");
+        foreach (var word in streamEvent.WordTimestamps)
+            Console.WriteLine($"word [{word.Span.StartSample}..{word.Span.EndSample}] {word.Confidence:F2} {word.Word}");
+    }
+
+    /// <summary>Parses --chunk-ms, returning null when the value is not a positive integer.</summary>
+    private static int? ChunkMilliseconds(string[] args)
+    {
+        var value = Option(args, "--chunk-ms");
+        if (value is null) return AudioCppStreaming.DefaultChunkMilliseconds;
+        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : null;
     }
 
     private static int RunTts(AudioCppRuntime runtime, string[] args)
