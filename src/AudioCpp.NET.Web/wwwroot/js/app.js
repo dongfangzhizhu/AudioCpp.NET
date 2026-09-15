@@ -328,6 +328,15 @@ $("asrRun").addEventListener("click", () => {
     render: (result) => {
       $("asrOutWrap").hidden = false;
       $("asrOut").textContent = result.text || "（空文本：音频可能为静音）";
+      const segments = result.segments || [];
+      const words = result.words || [];
+      $("asrStructured").hidden = segments.length === 0 && words.length === 0;
+      $("asrSegments").textContent = segments
+        .map((segment) => `[${segment.startSample}–${segment.endSample}] ${(segment.confidence ?? 0).toFixed(2)} ${segment.text || ""}`)
+        .join("\n");
+      $("asrWords").textContent = words
+        .map((word) => `[${word.startSample}–${word.endSample}] ${word.word}`)
+        .join("\n");
     },
   });
 });

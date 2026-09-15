@@ -137,14 +137,52 @@ internal sealed class AudioCppWorkbench
         var threads = Integer(form, "threads");
         using var runtime = CreateRuntime();
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath, FamilyHint = family, Threads = threads });
-        var text = model.Transcribe(new AsrRequest
+        var asrRequest = new AsrRequest
         {
             Audio = audio.Samples,
             SampleRate = audio.SampleRate,
             Channels = audio.Channels,
             Options = Options(form["options"])
-        });
-        return (object)new { text, audio.SampleRate, audio.Channels, samples = audio.Samples.Length };
+        };
+        try
+        {
+            var structured = model.Run(audioRequest: asrRequest);
+            return (object)new
+            {
+                text = structured.Text,
+                audio.SampleRate,
+                audio.Channels,
+                samples = audio.Samples.Length,
+                structured = true,
+                segments = structured.SpeechSegments.Select(segment => new
+                {
+                    startSample = segment.Span.StartSample,
+                    endSample = segment.Span.EndSample,
+                    confidence = segment.Confidence,
+                    text = segment.Text
+                }).ToArray(),
+                words = structured.WordTimestamps.Select(word => new
+                {
+                    startSample = word.Span.StartSample,
+                    endSample = word.Span.EndSample,
+                    confidence = word.Confidence,
+                    word = word.Word
+                }).ToArray(),
+                turns = structured.SpeakerTurns.Select(turn => new
+                {
+                    startSample = turn.Span.StartSample,
+                    endSample = turn.Span.EndSample,
+                    confidence = turn.Confidence,
+                    speakerId = turn.SpeakerId,
+                    text = turn.Text
+                }).ToArray()
+            };
+        }
+        catch (AudioCppInferenceException)
+        {
+            var text = model.Transcribe(asrRequest);
+            return (object)new { text, audio.SampleRate, audio.Channels, samples = audio.Samples.Length, structured = false };
+        }
     });
 
     internal async Task<object> SynthesizeAsync(HttpRequest request) => await Locked(async () =>

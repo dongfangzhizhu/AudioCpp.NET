@@ -144,6 +144,42 @@ void parse_options(const char * json, std::unordered_map<std::string, std::strin
         result[key] = value;
     }
 }
+
+// Style conditions ride in the flat option map of ABI v1. Scalar style knobs keep
+// their option keys; style tags arrive as "style_tag_<name>" pairs and are moved
+// into StyleCondition::tags so upstream models see a proper style condition.
+void apply_style_condition(engine::runtime::TaskRequest & request) {
+    engine::runtime::StyleCondition style;
+    bool has_style = false;
+    if (const auto it = request.options.find("style_language"); it != request.options.end()) { style.language = it->second; has_style = true; }
+    if (const auto it = request.options.find("emotion"); it != request.options.end()) { style.emotion = it->second; has_style = true; }
+    auto style_float = [&](const char * key, std::optional<float> & value) {
+        if (const auto it = request.options.find(key); it != request.options.end()) {
+            const std::string & text = it->second;
+            size_t consumed = 0;
+            const float parsed = std::stof(text, &consumed);
+            if (consumed != text.size()) throw std::invalid_argument(std::string(key) + " must be a plain number");
+            value = parsed;
+            has_style = true;
+        }
+    };
+    style_float("speaking_rate", style.speaking_rate);
+    style_float("pitch_shift", style.pitch_shift);
+    style_float("energy_scale", style.energy_scale);
+    constexpr const char * tag_prefix = "style_tag_";
+    const size_t prefix_length = std::char_traits<char>::length(tag_prefix);
+    for (auto it = request.options.begin(); it != request.options.end();) {
+        if (it->first.rfind(tag_prefix, 0) == 0 && it->first.size() > prefix_length) {
+            style.tags[it->first.substr(prefix_length)] = it->second;
+            has_style = true;
+            it = request.options.erase(it);
+        } else ++it;
+    }
+    if (has_style) {
+        request.voice = request.voice.value_or(engine::runtime::VoiceCondition{});
+        request.voice->style = std::move(style);
+    }
+}
 }
 
 struct audiocpp_model {
@@ -309,15 +345,7 @@ AUDIOCPP_API int32_t audiocpp_model_synthesize(audiocpp_model * context, const c
             request.voice->speaker->audio = std::move(reference);
         }
         parse_options(options_json, request.options);
-        engine::runtime::StyleCondition style;
-        bool has_style = false;
-        if (const auto it = request.options.find("style_language"); it != request.options.end()) { style.language = it->second; has_style = true; }
-        if (const auto it = request.options.find("emotion"); it != request.options.end()) { style.emotion = it->second; has_style = true; }
-        auto style_float = [&](const char * key, std::optional<float> & value) { if (const auto it = request.options.find(key); it != request.options.end()) { value = std::stof(it->second); has_style = true; } };
-        style_float("speaking_rate", style.speaking_rate);
-        style_float("pitch_shift", style.pitch_shift);
-        style_float("energy_scale", style.energy_scale);
-        if (has_style) { request.voice = request.voice.value_or(engine::runtime::VoiceCondition{}); request.voice->style = std::move(style); }
+        apply_style_condition(request);
         session->prepare(engine::runtime::build_preparation_request(request));
         const auto result = offline->run(request);
         if (!result.audio_output.has_value() || result.audio_output->samples.empty()) throw std::runtime_error("model returned no audio");
@@ -415,6 +443,7 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
             request.voice->speaker->audio = std::move(reference);
         }
         parse_options(options_json, request.options);
+        apply_style_condition(request);
         engine::runtime::SessionOptions session_options;
         session_options.backend = context->backend; session_options.options = context->session_options;
         auto session = context->model->create_task_session(spec, session_options);
@@ -430,19 +459,24 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
             for (size_t i = 0; i < audio.samples.size(); ++i) { if (i) json << ','; json << audio.samples[i]; }
             json << "]}";
         };
+        auto meta_json = [&](const std::unordered_map<std::string, std::string> & meta) {
+            json << '{';
+            size_t meta_index = 0;
+            for (const auto & item : meta) { if (meta_index++) json << ','; json << "\"" << json_escape(item.first) << "\":\"" << json_escape(item.second) << "\""; }
+            json << '}';
+        };
         auto artifact_json = [&](const engine::runtime::VoiceArtifact & artifact) {
             static constexpr char hex[] = "0123456789abcdef";
             const auto kind_name = [&]() { using K = engine::runtime::ArtifactKind; switch (artifact.kind) { case K::SpeakerEmbedding: return "speaker_embedding"; case K::StyleEmbedding: return "style_embedding"; case K::PromptEmbedding: return "prompt_embedding"; case K::AcousticTokens: return "acoustic_tokens"; case K::Midi: return "midi"; case K::TranscriptAlignment: return "transcript_alignment"; case K::DiarizationState: return "diarization_state"; case K::VadState: return "vad_state"; default: return "custom"; } }();
             json << "{\"id\":\"" << json_escape(artifact.id) << "\",\"kind\":\"" << kind_name << "\",\"payload_hex\":\"";
             for (const auto byte : artifact.payload) { const auto value = static_cast<unsigned char>(byte); json << hex[value >> 4] << hex[value & 15]; }
-            json << "\",\"meta\":{";
-            size_t meta_index = 0;
-            for (const auto & item : artifact.meta) { if (meta_index++) json << ','; json << "\"" << json_escape(item.first) << "\":\"" << json_escape(item.second) << "\""; }
-            json << "}}";
+            json << "\",\"meta\":";
+            meta_json(artifact.meta);
+            json << '}';
         };
         if (result.audio_output.has_value()) { json << ",\"audio_output\":"; audio_json(*result.audio_output); }
         json << ",\"named_audio_outputs\":[";
-        for (size_t i = 0; i < result.named_audio_outputs.size(); ++i) { if (i) json << ','; json << "{\"id\":\"" << json_escape(result.named_audio_outputs[i].id) << "\",\"audio\":"; audio_json(result.named_audio_outputs[i].audio); json << '}'; }
+        for (size_t i = 0; i < result.named_audio_outputs.size(); ++i) { if (i) json << ','; json << "{\"id\":\"" << json_escape(result.named_audio_outputs[i].id) << "\",\"audio\":"; audio_json(result.named_audio_outputs[i].audio); json << ",\"meta\":"; meta_json(result.named_audio_outputs[i].meta); json << '}'; }
         json << "],\"speech_segments\":[";
         for (size_t i = 0; i < result.speech_segments.size(); ++i) { if (i) json << ','; const auto & x = result.speech_segments[i]; json << "{\"start_sample\":" << x.span.start_sample << ",\"end_sample\":" << x.span.end_sample << ",\"confidence\":" << x.confidence << ",\"text\":\"" << json_escape(x.text) << "\"}"; }
         json << "],\"speaker_turns\":[";

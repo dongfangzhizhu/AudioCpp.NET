@@ -57,6 +57,11 @@ elseif(NOT AUDIOCPP_BACKEND STREQUAL "cpu")
   message(FATAL_ERROR "Unsupported AUDIOCPP_BACKEND=${AUDIOCPP_BACKEND}")
 endif()
 
+# The vendored cJSON header defaults to __declspec(dllexport) under MSVC, which
+# would leak cJSON_* into the shim export table. Hide them so the DLL surface
+# stays limited to the pinned ABI list (docs/adr/0001-versioned-c-abi.md).
+add_compile_definitions(CJSON_HIDE_SYMBOLS=1)
+
 add_subdirectory("${AUDIOCPP_SRC}" audio_cpp EXCLUDE_FROM_ALL)
 add_library(audiocpp_dotnet_native SHARED native/src/audiocpp_dotnet.cpp)
 target_compile_features(audiocpp_dotnet_native PRIVATE cxx_std_17)

@@ -124,7 +124,22 @@ internal static class ConsoleApp
         // manifest, so Audio8 and future ASR packages receive their own loader.
         using var model = runtime.LoadModel(new AudioCppModelOptions { ModelPath = modelPath });
         var audio = WaveFile.Read(input);
-        var text = model.Transcribe(new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels });
+        var request = new AsrRequest { Audio = audio.Samples, SampleRate = audio.SampleRate, Channels = audio.Channels };
+        if (HasFlag(args, "--structured"))
+        {
+            var structured = model.Run(audioRequest: request);
+            Console.WriteLine(structured.Text ?? "");
+            foreach (var segment in structured.SpeechSegments)
+                Console.WriteLine($"segment [{segment.Span.StartSample}..{segment.Span.EndSample}] {segment.Confidence:F2} {segment.Text}");
+            foreach (var word in structured.WordTimestamps)
+                Console.WriteLine($"word [{word.Span.StartSample}..{word.Span.EndSample}] {word.Confidence:F2} {word.Word}");
+            foreach (var turn in structured.SpeakerTurns)
+                Console.WriteLine($"speaker [{turn.Span.StartSample}..{turn.Span.EndSample}] {turn.SpeakerId} {turn.Confidence:F2} {turn.Text}");
+            foreach (var artifact in structured.Artifacts)
+                Console.WriteLine($"artifact {artifact.Id} kind={artifact.Kind} bytes={artifact.PayloadHex.Length / 2}");
+            return 0;
+        }
+        var text = model.Transcribe(request);
         Console.WriteLine(text);
         return 0;
     }
@@ -141,6 +156,25 @@ internal static class ConsoleApp
         var voiceRef = Option(args, "--voice-ref");
         var reference = voiceRef is null ? null : WaveFile.Read(voiceRef);
         var referenceText = Option(args, "--reference-text");
+        if (HasFlag(args, "--structured"))
+        {
+            var structured = model.Run(new TtsRequest
+            {
+                Text = text,
+                Task = Option(args, "--task") ?? "tts",
+                ReferencePcm = reference?.Samples ?? ReadOnlyMemory<float>.Empty,
+                ReferenceSampleRate = reference?.SampleRate ?? 0,
+                Options = BuildTtsOptions(args, reference, referenceText)
+            });
+            var clip = structured.AudioOutput ?? throw new AudioCppException("structured run returned no audio");
+            WaveFile.Write(output, new AudioBuffer(clip.Samples.ToArray(), clip.SampleRate, clip.Channels));
+            Console.WriteLine($"Generated {output} ({clip.SampleRate} Hz, {clip.Channels} channel(s), {clip.Samples.Count} samples)");
+            foreach (var named in structured.NamedAudioOutputs)
+                Console.WriteLine($"audio {named.Id} ({named.Audio.SampleRate} Hz, {named.Audio.Channels} channel(s), {named.Audio.Samples.Count} samples)");
+            foreach (var artifact in structured.Artifacts)
+                Console.WriteLine($"artifact {artifact.Id} kind={artifact.Kind} bytes={artifact.PayloadHex.Length / 2}");
+            return 0;
+        }
         var audio = model.Synthesize(new TtsRequest
         {
             Text = text,
@@ -313,5 +347,8 @@ Options:
   --voice-ref WAV     Reference speaker audio for voice-clone TTS
   --reference-text TEXT  Transcript of the reference audio
   --overwrite         Replace an existing package
+  --structured        Use the structured-result run ABI; asr prints text plus segments,
+                      words, speaker turns and artifacts, tts writes WAV from the
+                      structured audio output and lists artifacts
 """);
 }
