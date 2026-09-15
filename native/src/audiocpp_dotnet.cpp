@@ -419,7 +419,11 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
     *out_json = nullptr;
     try {
         engine::runtime::TaskSpec spec;
-        spec.task = engine::runtime::parse_voice_task_kind(task == nullptr || *task == '\0' ? "tts" : task);
+        // Default the task family from the request shape: audio-only input is
+        // transcription, otherwise generation. An explicit task string wins.
+        const bool has_audio_input = audio_samples != nullptr && audio_count > 0;
+        spec.task = engine::runtime::parse_voice_task_kind(
+            task == nullptr || *task == '\0' ? (has_audio_input ? "asr" : "tts") : task);
         spec.mode = engine::runtime::RunMode::Offline;
         engine::runtime::TaskRequest request;
         if (text != nullptr && *text != '\0') request.text_input = engine::runtime::Transcript{std::string(text), ""};
