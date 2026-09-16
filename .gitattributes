@@ -1,0 +1,7 @@
+# Shell scripts must stay LF: they are executed by bash under WSL/Linux,
+# where CRLF line endings break parsing (`set -euo pipefail\r`).
+*.sh text eol=lf
+# Windows batch/powershell scripts stay CRLF.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
