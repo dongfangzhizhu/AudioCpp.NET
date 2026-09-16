@@ -49,7 +49,6 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
-      version_ok: ${{ steps.v.outputs.version_ok }}
       publish: ${{ steps.v.outputs.publish }}
     steps:
       - id: v
