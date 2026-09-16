@@ -1,15 +1,25 @@
+# Build output. The whole build/ tree is derived: CMake build trees
+# (build/native-<backend>), the offline dependency cache (build/deps) and matrix
+# test output (build/artifacts).
 bin/
 obj/
 build/
 artifacts/
-upstream/
+
+# IDE state
 .vs/
 .vscode/
 *.user
 *.suo
+
+# NuGet output (packages are produced by eng/packaging/pack.*)
 *.nupkg
 *.snupkg
+
+# Pinned upstream checkouts and generated comparison reports
+upstream/
 upstream-*-report.md
 
-# Downloaded model packages and verification artifacts stay local
+# Downloaded model packages stay local: they are multi-GB and licensed separately
+# from this repository. Reinstall with the console `models download` command.
 /models/

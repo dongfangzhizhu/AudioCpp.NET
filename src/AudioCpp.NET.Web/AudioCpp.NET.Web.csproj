@@ -1,11 +1,22 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Local workbench for manual verification; run from source, not shipped. -->
+    <IsPackable>false</IsPackable>
+    <!--
+      The workbench groups the package list by the `category` field of the upstream
+      model specs. Those specs live in the pinned audio.cpp checkout that sits beside
+      this repository, which is not vendored here, so the directory is a property:
+      the build still succeeds without it (the UI simply reports a single `unknown`
+      group) and CI or an out-of-tree checkout can point it somewhere else with
+      -p:AudioCppModelSpecsDir=...
+    -->
+    <AudioCppModelSpecsDir Condition="'$(AudioCppModelSpecsDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\audio.cpp\model_specs</AudioCppModelSpecsDir>
   </PropertyGroup>
+  <ItemGroup Condition="Exists('$(AudioCppModelSpecsDir)')">
+    <Content Include="$(AudioCppModelSpecsDir)\*.json" Link="model_specs\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup>
-    <Content Include="..\..\..\audio.cpp\model_specs\*.json" Link="model_specs\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <!-- Non-Development hosts serve wwwroot from disk, so ship it next to the executable. -->
     <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <ProjectReference Include="..\AudioCpp.NET\AudioCpp.NET.csproj" />

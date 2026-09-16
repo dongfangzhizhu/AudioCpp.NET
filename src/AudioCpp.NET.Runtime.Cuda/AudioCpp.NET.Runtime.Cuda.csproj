@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Native-only asset package for the CUDA backend. See AudioCpp.NET.Runtime.csproj:
+    identical shape, different staged binaries. The CUDA shim is much larger because
+    it statically links the CUDA kernels.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
+    <PackageId>AudioCpp.NET.Runtime.Cuda</PackageId>
+    <Description>Native audio.cpp shim (CUDA backend) for AudioCpp.NET. Adds runtimes/win-x64 and runtimes/linux-x64 native libraries with NVIDIA GPU acceleration. Reference AudioCpp.NET plus exactly one runtime package.</Description>
+    <PackageReadmeFile>README-runtime.md</PackageReadmeFile>
+
+    <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
+
+    <!-- See AudioCpp.NET.Runtime.csproj: asset-only packages ship no symbols. -->
+    <IncludeSymbols>false</IncludeSymbols>
+    <SymbolPackageFormat></SymbolPackageFormat>
+
+    <AudioCppShimDir Condition="'$(AudioCppShimDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\nuget-staging\cuda</AudioCppShimDir>
+    <AudioCppRuntimeRids>win-x64;linux-x64</AudioCppRuntimeRids>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll"
+          Pack="true" PackagePath="runtimes/win-x64/native/"
+          Condition="Exists('$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll')" />
+    <None Include="$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so"
+          Pack="true" PackagePath="runtimes/linux-x64/native/"
+          Condition="Exists('$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so')" />
+
+    <None Include="buildTransitive\AudioCpp.NET.Runtime.Cuda.props" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="buildTransitive\AudioCpp.NET.Runtime.Cuda.targets" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="..\..\docs\nuget\README-runtime.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <Import Project="..\..\eng\packaging\ShimStagingCheck.targets" />
+
+</Project>

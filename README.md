@@ -2,15 +2,54 @@
 
 .NET 10 bindings for [audio.cpp](https://github.com/0xShug0/audio.cpp), using a small versioned C ABI shim over `engine_runtime`.
 
-> Development status: initial ABI/TTS foundation. The upstream source is pinned; this repository never builds an unreviewed moving `main` branch.
+> Status: wraps every model family the pinned engine defines — 74 `model_specs`
+> families produce 74 linked loaders and a 76-entry catalog (74 + 2 built-in VADs),
+> with 217 downloadable packages. Verified on four platform cells:
+> Windows/Linux × CPU/CUDA. See
+> [`docs/verification/release-readiness.md`](docs/verification/release-readiness.md)
+> for the evidence. The upstream source is pinned; this repository never builds an
+> unreviewed moving `main` branch.
+
+## Install
+
+```xml
+<PackageReference Include="AudioCpp.NET" Version="0.1.0" />
+<PackageReference Include="AudioCpp.NET.Runtime" Version="0.1.0" />
+```
+
+`AudioCpp.NET.Runtime` is the CPU backend. For NVIDIA GPUs use
+`AudioCpp.NET.Runtime.Cuda` instead — reference exactly one, never both, because the
+shims share a file name and the packages fail the build if you reference two.
+
+Model weights are not redistributed (multi-GB, separately licensed). Install them
+with the companion CLI:
+
+```powershell
+dotnet run --project src/AudioCpp.NET.Console -- models download <id> --models-dir models
+```
 
 ## Pinned upstream
 
 - Repository: `https://github.com/0xShug0/audio.cpp`
 - Commit: `78d47706c30ef215ba9ad3559baff309efeb5260`
 - Lock file: [`eng/upstream.lock.json`](eng/upstream.lock.json)
+- License: Apache-2.0 (Copyright 2026 ShugoAI LLC) — see [`NOTICE`](NOTICE)
 
-Read [`PLAN.md`](PLAN.md) for architecture, scope, milestones, upgrade policy, risks, and acceptance criteria.
+Read [`docs/PLAN.md`](docs/PLAN.md) for architecture, scope, milestones, upgrade policy, risks, and acceptance criteria.
+
+## Repository layout
+
+| Path | Contents |
+| --- | --- |
+| `src/AudioCpp.NET` | Managed API (the published `AudioCpp.NET` package) |
+| `src/AudioCpp.NET.Interop` | P/Invoke layer; folded into the managed package, never published alone |
+| `src/AudioCpp.NET.Runtime{,.Cuda}` | Asset-only runtime packages carrying the native shims |
+| `src/AudioCpp.NET.Console`, `.Web` | Local tooling: CLI and test workbench (not published) |
+| `native/` | The C ABI shim sources, export lists and ABI/e2e probes |
+| `eng/matrix/` | Reproducible build-and-test matrix scripts, plus single-cell debugging tools |
+| `eng/packaging/` | Staging, packing, archive and package-verification scripts |
+| `docs/verification/` | Release-readiness evidence, coverage audit and raw matrix logs |
+| `build/` | Gitignored: CMake trees, dependency cache, test output |
 
 ## Build managed projects
 
@@ -18,6 +57,25 @@ Read [`PLAN.md`](PLAN.md) for architecture, scope, milestones, upgrade policy, r
 dotnet build AudioCpp.NET.slnx
 dotnet test AudioCpp.NET.slnx
 ```
+
+## Package and release
+
+```powershell
+# build the shims first (see "Build native shim"), then:
+powershell -File eng\packaging\pack.ps1 -Version 0.1.0
+```
+
+`.github/workflows/release.yml` publishes from CI. The managed package is built from
+source; the runtime packages are assembled from `audiocpp-native-*.zip` archives
+attached to the GitHub Release, because a full-set shim (and any CUDA shim) cannot be
+built on a GitHub-hosted runner. Produce those archives with:
+
+```powershell
+powershell -File eng\packaging\make-native-archives.ps1
+```
+
+See the README of `eng/packaging/` for the full release sequence.
+
 
 ## Console model tools
 
@@ -161,14 +219,40 @@ dotnet run --project src/AudioCpp.NET.Web --urls http://127.0.0.1:5099
 
 ## Build native shim
 
-Use the pinned checkout already present beside this repository:
+Use the pinned checkout beside this repository. The `eng/matrix` scripts wrap configure
+and build for the full model set and place the result where the loader's repository
+probe expects it (`build/native-<backend>`):
 
 ```powershell
-cmake -S . -B build/native -DAUDIOCPP_SRC=../audio.cpp -DAUDIOCPP_BACKEND=cpu
-cmake --build build/native --config Release --target audiocpp_dotnet_native --parallel
+powershell -File eng\matrix\configure-win.ps1 -Backend cpu
+powershell -File eng\matrix\build-win.ps1     -Backend cpu
+# build\native-cpu\audiocpp_dotnet_native.dll
+
+# the full four-cell matrix (configure + build + smoke + e2e + managed tests):
+powershell -File eng\matrix\win-full-matrix.ps1 -Configure
+wsl -d Debian -- bash eng/matrix/linux-full-matrix.sh
 ```
 
-The native build is intentionally separate from normal managed unit tests. End-to-end inference additionally requires a compatible model.
+Equivalent raw CMake, if you prefer to drive it yourself:
+
+```powershell
+cmake -S . -B build/native-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DAUDIOCPP_SRC=../audio-pinned -DAUDIOCPP_BACKEND=cpu -DAUDIOCPP_MODEL_SET=full
+cmake --build build/native-cpu --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke audiocpp_dotnet_e2e --parallel
+```
+
+`AUDIOCPP_MODEL_SET` accepts `full` (all 74 families, the default and what releases
+use), `core` (engine only, no model loaders — used by the CI ABI gate) and `custom`
+(an explicit `-DAUDIOCPP_MODELS=...` list).
+
+The native build is intentionally separate from normal managed unit tests. End-to-end
+inference additionally requires a compatible model; the matrix scripts derive their
+16 kHz fixtures from `models/jinguling.wav` via
+`eng/matrix/tools/make-fixtures.py`.
+
+The matrix scripts expect a WSL checkout of the pinned engine at
+`~/audiocpp-build/audio-pinned` (override with `AUDIOCPP_UPSTREAM`) and reuse the
+BoringSSL source cached at `build/deps/boringssl-src` instead of downloading it.
 
 ### GPU (CUDA) builds
 

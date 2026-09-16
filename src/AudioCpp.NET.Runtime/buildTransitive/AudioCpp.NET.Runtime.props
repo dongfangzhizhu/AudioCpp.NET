@@ -1,0 +1,13 @@
+<Project>
+
+  <!--
+    Registers this runtime in a cumulative item so the conflict guard in the matching
+    .targets file can see how many native runtimes the consumer pulled in. An item is
+    used rather than a property because item lists accumulate regardless of the order
+    in which NuGet imports the two packages' props files.
+  -->
+  <ItemGroup>
+    <AudioCppNativeRuntime Include="cpu" />
+  </ItemGroup>
+
+</Project>

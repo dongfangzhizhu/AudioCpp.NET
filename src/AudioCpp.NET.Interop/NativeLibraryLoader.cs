@@ -68,11 +68,16 @@ internal static class NativeLibraryLoader
         {
             var variants = Directory.EnumerateDirectories(buildRoot, "native*", SearchOption.TopDirectoryOnly);
             foreach (var variant in variants)
-                foreach (var configuration in new[] { "Release", "Debug" })
+            {
+                // Multi-config generators (Visual Studio) nest the output under the
+                // configuration; Ninja, which the eng/matrix scripts use, places it
+                // directly in the build directory. Probe both.
+                foreach (var configuration in new[] { "Release", "Debug", string.Empty })
                 {
                     var candidate = Path.Combine(variant, configuration, libraryName);
                     if (File.Exists(candidate)) found.Add(candidate);
                 }
+            }
         }
         var runtimes = Path.Combine(root, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", libraryName);
         if (File.Exists(runtimes)) found.Add(runtimes);

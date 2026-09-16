@@ -40,16 +40,22 @@
         <h2><i class="tick"></i>MODEL BAY <span class="h2-cn">模型包</span></h2>
         <div class="bay-tools">
           <button class="btn" id="refreshPackages">⟳ Rescan</button>
+          <button class="btn btn-mini" id="togglePackages" type="button">⊞ 全部展开</button>
+          <input class="mono filter-input" id="packageFilter" type="search" spellcheck="false"
+                 placeholder="过滤：类别 / 包名 / 家族" aria-label="过滤模型包">
           <span class="mono dim" id="packageCount"></span>
         </div>
-        <ul class="package-list" id="packageList" aria-live="polite"></ul>
+        <div class="group-list" id="packageList" aria-live="polite"></div>
 
         <h3>DETECTED LOCAL MODELS <span class="h2-cn">本地模型目录</span></h3>
         <div class="bay-tools">
           <button class="btn" id="refreshModels">⟳ Rescan</button>
+          <button class="btn btn-mini" id="toggleModels" type="button">⊞ 全部展开</button>
+          <input class="mono filter-input" id="modelFilter" type="search" spellcheck="false"
+                 placeholder="过滤：类别 / 目录名 / 家族" aria-label="过滤本地模型">
           <span class="mono dim" id="modelCount"></span>
         </div>
-        <ul class="model-list" id="modelList"></ul>
+        <div class="group-list" id="modelList"></div>
       </article>
 
       <article class="panel" style="--reveal:3">
@@ -61,8 +67,8 @@
         <pre class="mono" id="buildFlags">loading…</pre>
         <h3>CANONICAL TASKS <span class="h2-cn">规范任务令牌</span></h3>
         <pre class="mono" id="taskCatalog"></pre>
-        <h3>LOADERS <span class="h2-cn">编译进 native 的加载器</span></h3>
-        <pre class="mono" id="loaderCatalog"></pre>
+        <h3>LOADERS <span class="h2-cn">编译进 native 的加载器（按类别分组）</span></h3>
+        <div class="group-list" id="loaderCatalog"></div>
       </article>
 
       <article class="panel" style="--reveal:4">

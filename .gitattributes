@@ -1,6 +1,14 @@
 # Shell scripts must stay LF: they are executed by bash under WSL/Linux,
 # where CRLF line endings break parsing (`set -euo pipefail\r`).
 *.sh text eol=lf
+
+# Python helper scripts run in the same WSL/Linux shells.
+*.py text eol=lf
+
+# Workflow definitions are parsed by Actions runners (Linux), so keep them LF.
+*.yml text eol=lf
+*.yaml text eol=lf
+
 # Windows batch/powershell scripts stay CRLF.
 *.cmd text eol=crlf
 *.ps1 text eol=crlf

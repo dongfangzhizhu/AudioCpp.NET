@@ -1,0 +1,56 @@
+AudioCpp.NET
+Copyright (c) 2026 AudioCpp.NET contributors
+
+This product includes software developed by third parties. The native shims
+distributed in the AudioCpp.NET.Runtime and AudioCpp.NET.Runtime.Cuda packages are
+compiled from, and statically link, the following code.
+
+================================================================================
+audio.cpp — the speech engine this project binds
+================================================================================
+
+    https://github.com/0xShug0/audio.cpp
+    Copyright 2026 ShugoAI LLC
+    Licensed under the Apache License, Version 2.0.
+
+    Pinned revision: 78d47706c30ef215ba9ad3559baff309efeb5260
+    (see eng/upstream.lock.json and CMakeLists.txt; the build refuses to run
+    against any other revision)
+
+================================================================================
+Bundled in audio.cpp's external/ tree, and therefore linked into the shim
+================================================================================
+
+    ggml              MIT License
+    llama_tokenizer   no license file is present in the upstream tree
+                      -> see the open question below
+    sentencepiece     Apache License 2.0
+    cpp-httplib       MIT License        (model downloader / HTTP transport)
+    libyaml           MIT License        (model spec parsing)
+    cJSON             MIT License        (model spec parsing)
+
+    BoringSSL may additionally be linked when the shim is built with
+    -DAUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON, which is the default for released
+    shims. BoringSSL is governed by the OpenSSL License and the original SSLeay
+    License; a copy of that text ships with the BoringSSL source.
+
+================================================================================
+OPEN QUESTION — not resolved by this file
+================================================================================
+
+    `external/llama_tokenizer` carries no LICENSE or COPYING file in the pinned
+    upstream revision, and no license statement was found in its sources. Its
+    terms are therefore NOT established here rather than assumed. The shim links
+    it, so redistributing the shims in the runtime packages depends on its terms.
+
+    Before publishing to a public feed, either confirm the license with the
+    upstream project or build the shim without that component. This file will be
+    updated once the answer is known; it is deliberately not guessed.
+
+================================================================================
+Apache License, Version 2.0
+================================================================================
+
+A copy of the Apache License, Version 2.0 is provided in the LICENSE file in this
+directory. It applies to this project and to the audio.cpp and sentencepiece
+components listed above.

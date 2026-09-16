@@ -1,0 +1,56 @@
+name: ci
+
+# Managed-layer gate: builds and unit-tests the .NET surface on both supported host
+# operating systems.
+#
+# The native shim is a CMake artefact that is not built here, so the integration
+# tests that need a real library or model skip themselves rather than fail. The
+# compile + ABI gate for the shim is native-abi.yml; packaging and publishing are
+# release.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  managed:
+    name: managed (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore AudioCpp.NET.slnx
+
+      - name: Build
+        run: dotnet build AudioCpp.NET.slnx -c Release --no-restore
+
+      - name: Test
+        run: >
+          dotnet test tests/AudioCpp.NET.Tests
+          -c Release --no-build --nologo
+          --logger "console;verbosity=normal"
+
+      # A packaging regression in the managed package would otherwise only surface
+      # at release time.
+      - name: Pack managed package (validation only)
+        run: dotnet pack src/AudioCpp.NET/AudioCpp.NET.csproj -c Release --no-build -o build/nuget-check

@@ -8,15 +8,17 @@
   "pinnedAtUtc": "2026-09-11T00:00:00Z",
   "shimAbi": {
     "major": 1,
-    "minor": 0
+    "minor": 3
   },
   "build": {
     "deploymentBuild": true,
     "defaultBackend": "cpu",
-    "defaultModelSet": "custom",
-    "defaultModels": [
-      "qwen3_tts"
-    ],
-    "portableCpu": true
+    "defaultModelSet": "full",
+    "defaultModels": [],
+    "modelSetOptions": ["full", "core", "custom"],
+    "modelFamilies": 74,
+    "modelManagerDefault": "on",
+    "portableCpu": true,
+    "notes": "Values verified against a full-set build on 2026-09-16: 74 model_specs families produced 74 linked loaders and 76 catalog entries (74 + 2 built-in VADs), ABI 1.3, capabilities 0xFF. 'core' selects the engine with no model loaders and is what the CI ABI gate builds."
   }
 }

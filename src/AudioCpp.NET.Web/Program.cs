@@ -124,6 +124,9 @@ internal sealed class AudioCppWorkbench
             loaders = runtime.ListLoaders().Select(loader => new
             {
                 loader.Family,
+                // Grouping key for the UI: loaders themselves carry no category,
+                // but every family is declared by exactly one model_spec.
+                category = ModelMetadata.CategoryOfFamily(loader.Family),
                 loader.InstructionsPolicy,
                 loader.Languages,
                 loader.SupportsSpeakerReference,
@@ -152,7 +155,26 @@ internal sealed class AudioCppWorkbench
             build = runtime.BuildInfo,
             modelManager = enabled,
             message = enabled ? null : "model manager is not enabled in this native build; rebuild with -DAUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON to enable package listing and download",
-            packages = enabled ? runtime.ListPackages() : [],
+            packages = enabled
+                ? runtime.ListPackages().Select(package =>
+                {
+                    var spec = ModelMetadata.Resolve(package.Id);
+                    var family = ModelMetadata.FamilyOfPackage(package.Id);
+                    return new
+                    {
+                        package.Id,
+                        package.Installed,
+                        package.State,
+                        package.Message,
+                        package.SizeBytes,
+                        package.VersionState,
+                        package.LocalRevision,
+                        package.RemoteRevision,
+                        family,
+                        category = spec.Category,
+                    };
+                }).ToArray()
+                : [],
         };
     });
 
@@ -167,13 +189,21 @@ internal sealed class AudioCppWorkbench
             var report = ModelValidator.Validate(dir);
             var metadata = ModelMetadata.Resolve(report.PackageId);
             var family = report.PackageId is null ? null : ModelValidator.DeriveFamily(report.PackageId, families);
+            var resolvedFamily = family ?? metadata.Family;
+            // A hand-assembled directory may have no package id at all; fall back
+            // to the family-keyed spec lookup so it still lands in a real group.
+            var category = metadata.Category != ModelMetadata.UnknownCategory
+                ? metadata.Category
+                : ModelMetadata.CategoryOfFamily(resolvedFamily);
             result.Add(new
             {
                 name = Path.GetFileName(dir),
                 path = Path.GetFullPath(dir),
                 models = Directory.EnumerateFiles(dir, "*.gguf").Select(Path.GetFileName).ToArray(),
                 packageId = report.PackageId,
-                family = family ?? metadata.Family,
+                family = resolvedFamily,
+                category,
+                installedBytes = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Sum(file => new FileInfo(file).Length),
                 metadata.Task,
                 metadata.Languages,
                 metadata.Tasks,

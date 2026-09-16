@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Native-only asset package: no managed assembly, no dependencies. It contributes
+    runtimes/<rid>/native/ entries, which the .NET SDK resolves and copies next to
+    the consuming app automatically.
+
+    The shims are prebuilt by CMake (they link the pinned audio.cpp engine) and must
+    be staged before packing:
+
+        eng/packaging/pack.ps1 -Backend cpu -ShimDir <dir containing win-x64/ and linux-x64/>
+
+    Packing with no staged shims is a hard error rather than an empty package.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
+    <PackageId>AudioCpp.NET.Runtime</PackageId>
+    <Description>Native audio.cpp shim (CPU backend) for AudioCpp.NET. Adds runtimes/win-x64 and runtimes/linux-x64 native libraries. Reference AudioCpp.NET plus exactly one runtime package.</Description>
+    <PackageReadmeFile>README-runtime.md</PackageReadmeFile>
+
+    <!-- NU5128: an asset-only package legitimately has no lib/ assemblies. -->
+    <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
+
+    <!--
+      No managed code means no symbols to publish, and the SDK rejects an empty
+      symbols package with NU5017. Directory.Build.props turns symbols on globally
+      because the managed package does ship a .snupkg.
+    -->
+    <IncludeSymbols>false</IncludeSymbols>
+    <SymbolPackageFormat></SymbolPackageFormat>
+
+    <AudioCppShimDir Condition="'$(AudioCppShimDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\nuget-staging\cpu</AudioCppShimDir>
+    <AudioCppRuntimeRids>win-x64;linux-x64</AudioCppRuntimeRids>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll"
+          Pack="true" PackagePath="runtimes/win-x64/native/"
+          Condition="Exists('$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll')" />
+    <None Include="$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so"
+          Pack="true" PackagePath="runtimes/linux-x64/native/"
+          Condition="Exists('$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so')" />
+
+    <None Include="buildTransitive\AudioCpp.NET.Runtime.props" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="buildTransitive\AudioCpp.NET.Runtime.targets" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="..\..\docs\nuget\README-runtime.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <Import Project="..\..\eng\packaging\ShimStagingCheck.targets" />
+
+</Project>

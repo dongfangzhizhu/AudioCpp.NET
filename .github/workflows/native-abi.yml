@@ -1,0 +1,94 @@
+name: native-abi
+
+# Compile + ABI gate for the native shim.
+#
+# This builds against the pinned audio.cpp revision using AUDIOCPP_MODEL_SET=core,
+# which selects the engine with no model loaders, and disables the model manager so
+# no BoringSSL download is needed. That keeps the gate fast.
+#
+# It is deliberately NOT the shipping configuration. Released shims are full-set
+# builds, produced by the eng/matrix scripts on a machine that has the toolchain and
+# (for CUDA) the GPU; this workflow only proves the shim still compiles against the
+# pin and that the exported ABI surface still matches what managed code expects.
+
+on:
+  push:
+    paths:
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - 'eng/**'
+      - '.github/workflows/native-abi.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'CMakeLists.txt'
+      - 'eng/**'
+      - '.github/workflows/native-abi.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shim:
+    name: shim ABI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # CMakeLists.txt asserts the checkout is at the pinned revision, so fetch that
+      # exact commit rather than a branch tip. The shim repository expects upstream to
+      # be its sibling (AUDIOCPP_SRC defaults to ../audio.cpp).
+      - name: Check out the pinned audio.cpp revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA=$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' eng/upstream.lock.json | head -1)
+          test -n "$SHA" || { echo "could not read the pinned commit from eng/upstream.lock.json"; exit 1; }
+          UPSTREAM="$GITHUB_WORKSPACE/../audio.cpp"
+          git init "$UPSTREAM"
+          git -C "$UPSTREAM" remote add origin https://github.com/0xShug0/audio.cpp.git
+          git -C "$UPSTREAM" fetch --depth 1 origin "$SHA"
+          git -C "$UPSTREAM" checkout --detach FETCH_HEAD
+          echo "pinned upstream: $(git -C "$UPSTREAM" rev-parse HEAD) (expected $SHA)"
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use the platform's default generator: on Windows that is Visual Studio,
+          # which locates MSVC on its own and keeps this workflow free of a manual
+          # vcvars step.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            GEN=(-G "Visual Studio 17 2022" -A x64)
+          else
+            GEN=(-G Ninja)
+          fi
+          cmake -S . -B build/native-ci "${GEN[@]}" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAUDIOCPP_BACKEND=cpu \
+            -DAUDIOCPP_MODEL_SET=core \
+            -DAUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=OFF
+
+      - name: Build shim and ABI smoke
+        run: >
+          cmake --build build/native-ci --config Release
+          --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke
+          --parallel
+
+      # abi_smoke links against the shim and asserts the ABI version, the required
+      # capability bits, the task catalog (canonical tokens plus model_spec aliases)
+      # and that the newer entry points resolve. A forgotten export or a schema bump
+      # fails here rather than inside managed code.
+      - name: Run ABI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE=$(find build/native-ci -name 'audiocpp_dotnet_abi_smoke*' -type f -not -name '*.pdb' | head -1)
+          echo "running $SMOKE"
+          "$SMOKE"

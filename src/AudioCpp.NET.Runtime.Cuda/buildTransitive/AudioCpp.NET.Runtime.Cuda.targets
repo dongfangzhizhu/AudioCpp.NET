@@ -1,0 +1,17 @@
+<Project>
+
+  <PropertyGroup>
+    <_AudioCppNativeRuntimeCount>@(AudioCppNativeRuntime->Count())</_AudioCppNativeRuntimeCount>
+  </PropertyGroup>
+
+  <!--
+    Deliberately the same target name as the CPU package's guard: MSBuild lets a later
+    definition replace an earlier one, so whichever package is imported last still
+    enforces the single-runtime rule, and the two bodies are identical anyway.
+  -->
+  <Target Name="AudioCppRuntimeConflictGuard" BeforeTargets="PrepareForBuild">
+    <Error Condition="$(_AudioCppNativeRuntimeCount) &gt; 1"
+           Text="Multiple AudioCpp.NET native runtimes are referenced (@(AudioCppNativeRuntime)). They all provide the same native file name, so only one can be used per project. Keep exactly one of AudioCpp.NET.Runtime (CPU) or AudioCpp.NET.Runtime.Cuda, and select the backend at run time through AudioCppRuntimeOptions." />
+  </Target>
+
+</Project>

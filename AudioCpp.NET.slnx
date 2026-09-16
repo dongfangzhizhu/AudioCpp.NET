@@ -5,6 +5,15 @@
     <Project Path="src/AudioCpp.NET.Console/AudioCpp.NET.Console.csproj" />
     <Project Path="src/AudioCpp.NET.Web/AudioCpp.NET.Web.csproj" />
   </Folder>
+  <!--
+    Asset-only packages: they compile nothing and exist to carry the prebuilt native
+    shims. Listed so the repository structure is self-describing and so a plain build
+    validates them; packing them requires staged shims (see eng/packaging).
+  -->
+  <Folder Name="/packaging/">
+    <Project Path="src/AudioCpp.NET.Runtime/AudioCpp.NET.Runtime.csproj" />
+    <Project Path="src/AudioCpp.NET.Runtime.Cuda/AudioCpp.NET.Runtime.Cuda.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/AudioCpp.NET.Tests/AudioCpp.NET.Tests.csproj" />
   </Folder>

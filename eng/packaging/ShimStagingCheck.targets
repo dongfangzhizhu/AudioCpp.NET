@@ -1,0 +1,34 @@
+<Project>
+
+  <!--
+    Shared by the AudioCpp.NET.Runtime / AudioCpp.NET.Runtime.Cuda asset packages.
+
+    Those packages contribute prebuilt CMake output, so there is nothing to compile —
+    which also means an un-staged pack would silently succeed and publish an empty
+    package that only fails later, on the consumer's machine, as a DllNotFoundException.
+    Refuse to produce that package at all.
+
+    Set AudioCppRuntimeRids to declare which runtimes a release is expected to carry
+    (the pack scripts set it to the RIDs actually staged); the check then requires every
+    one of them to be present, not merely at least one.
+  -->
+  <Target Name="AudioCppVerifyShimStaged" BeforeTargets="GenerateNuspec">
+    <ItemGroup>
+      <_AudioCppStagedShim Include="$(AudioCppShimDir)\win-x64\*" />
+      <_AudioCppStagedShim Include="$(AudioCppShimDir)\linux-x64\*" />
+    </ItemGroup>
+
+    <Error Condition="'@(_AudioCppStagedShim)' == ''"
+           Text="Nothing to package for $(PackageId): no native shim found under '$(AudioCppShimDir)'. Build the shim first (eng/matrix/configure-win.ps1 + build-win.ps1, or eng/matrix/linux-full-matrix.sh) and stage it as '$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll' and/or '$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so'." />
+
+    <Error Condition="'$(AudioCppRuntimeRids)' != '' AND !Exists('$(AudioCppShimDir)\win-x64') AND $([System.String]::Copy('$(AudioCppRuntimeRids)').Contains('win-x64'))"
+           Text="$(PackageId) declares RID win-x64 in AudioCppRuntimeRids but '$(AudioCppShimDir)\win-x64' does not exist." />
+
+    <Error Condition="'$(AudioCppRuntimeRids)' != '' AND !Exists('$(AudioCppShimDir)\linux-x64') AND $([System.String]::Copy('$(AudioCppRuntimeRids)').Contains('linux-x64'))"
+           Text="$(PackageId) declares RID linux-x64 in AudioCppRuntimeRids but '$(AudioCppShimDir)\linux-x64' does not exist." />
+
+    <Message Importance="high"
+             Text="$(PackageId): packaging native shims from $(AudioCppShimDir) -> @(_AudioCppStagedShim->'%(RecursiveDir)%(Filename)%(Extension)', ' ')" />
+  </Target>
+
+</Project>

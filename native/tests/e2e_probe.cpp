@@ -4,7 +4,7 @@
  * cpu/cuda). One WAV reader, three modes:
  *
  *   audiocpp_dotnet_e2e asr MODEL WAV [--family F] [--backend B] [--threads N]
- *   audiocpp_dotnet_e2e tts MODEL TEXT OUT.wav [--voice-ref WAV] [--family F] [--backend B] [--threads N]
+ *   audiocpp_dotnet_e2e tts MODEL TEXT OUT.wav [--voice-ref WAV] [--ref-text T] [--max-tokens N] [--family F] [--backend B] [--threads N]
  *   audiocpp_dotnet_e2e vad MODEL WAV [--family F] [--backend B] [--threads N]
  *
  * Exit 0 means the model loaded, inference ran and the outputs made sense.
@@ -113,6 +113,7 @@ void write_wav(const std::string & path, const float * samples, size_t count, in
 struct Args {
     std::string mode, model, positional, out_wav, voice_ref, ref_text, family, backend;
     int threads = 0;
+    int max_tokens = 0;
 };
 
 Args parse(int argc, char ** argv) {
@@ -128,6 +129,7 @@ Args parse(int argc, char ** argv) {
         else if (flag == "--voice-ref") args.voice_ref = value();
         else if (flag == "--ref-text") args.ref_text = value();
         else if (flag == "--threads") args.threads = std::atoi(value().c_str());
+        else if (flag == "--max-tokens") args.max_tokens = std::atoi(value().c_str());
         else positional.emplace_back(flag);
     }
     if (args.mode == "tts") {
@@ -216,10 +218,20 @@ int run_tts(const Args & args) {
     if (model == nullptr) { std::cerr << "e2e: load failed: " << err << '\n'; return 3; }
     float * samples = nullptr;
     int32_t count = 0, rate = 0, channels = 0;
-    // Qwen3 voice-clone ICL mode demands the reference transcript alongside the prompt audio.
+    // Qwen3 voice-clone ICL mode demands the reference transcript alongside the prompt
+    // audio. max_tokens caps the talker's codec-frame budget: the loader default is
+    // 2048 frames, which samples an EOS on a fast CUDA run but makes a CPU-only run
+    // grind for hours (and, with a long prompt, blow past the RAM ceiling), so the
+    // matrix pins a small budget for a bounded smoke test.
+    std::vector<std::string> fields;
+    if (!args.ref_text.empty()) fields.push_back("\"reference_text\":\"" + args.ref_text + "\"");
+    if (args.max_tokens > 0) fields.push_back("\"max_tokens\":" + std::to_string(args.max_tokens));
     std::string options;
-    if (!args.ref_text.empty())
-        options = "{\"reference_text\":\"" + args.ref_text + "\"}";
+    if (!fields.empty()) {
+        options = "{";
+        for (size_t i = 0; i < fields.size(); ++i) { if (i != 0) options += ','; options += fields[i]; }
+        options += "}";
+    }
     const int status = audiocpp_model_synthesize(model, "tts", args.positional.c_str(), nullptr,
         ref_pcm, ref_pcm ? int32_t(ref.samples.size()) : 0, ref_rate,
         options.empty() ? nullptr : options.c_str(),
@@ -335,7 +347,7 @@ static int run(const int argc, char ** argv) {
     if (argc < 3) {
         std::cerr << "usage:\n"
                   << "  audiocpp_dotnet_e2e asr MODEL WAV [--family F] [--backend B] [--threads N]\n"
-                  << "  audiocpp_dotnet_e2e tts MODEL TEXT OUT.wav [--voice-ref WAV] [--ref-text TEXT] [--family F] [--backend B] [--threads N]\n"
+                  << "  audiocpp_dotnet_e2e tts MODEL TEXT OUT.wav [--voice-ref WAV] [--ref-text TEXT] [--max-tokens N] [--family F] [--backend B] [--threads N]\n"
                   << "  audiocpp_dotnet_e2e vad MODEL WAV [--family F] [--backend B] [--threads N]\n";
         return 2;
     }

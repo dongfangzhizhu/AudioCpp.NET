@@ -3,6 +3,7 @@
 
 const $ = (id) => document.getElementById(id);
 let localModels = [];
+let packageCache = [];
 let taskCatalog = [];
 let loaderCatalog = [];
 let buildInfo = null;
@@ -17,9 +18,18 @@ function showTask(task) {
 }
 
 function describeModel(entry) {
-  $("modelCapabilities").textContent = entry
-    ? `${entry.name} · ${entry.task} · Family: ${entry.family || "未知（可手动填写）"} · 支持语言（规格声明）: ${(entry.languages || []).join(", ") || "未知"} · 任务: ${(entry.tasks || []).join(", ")}。文件完整不代表 native 支持推理。`
-    : "未匹配本地模型：Family 可手动填写，留空由运行时推断。";
+  if (!entry) {
+    $("modelCapabilities").textContent = "未匹配本地模型：Family 可手动填写，留空由运行时推断。";
+    return;
+  }
+  const category = entry.category ? ` · 类别: ${categoryLabel(entry.category)}` : "";
+  const canonical = (entry.canonicalTasks || []).join(", ");
+  $("modelCapabilities").textContent =
+    `${entry.name} · ${TASK_LABELS[entry.task] || entry.task} · Family: ${entry.family || "未知（可手动填写）"}${category}` +
+    ` · 支持语言（规格声明）: ${(entry.languages || []).join(", ") || "未知"}` +
+    ` · 规格任务: ${(entry.tasks || []).join(", ") || "未知"}` +
+    (canonical ? ` · 可跑令牌: ${canonical}` : "") +
+    "。目录完整只说明权重齐全，实际能否推理取决于当前 native 构建是否链入了该家族。";
 }
 
 for (const task of ["asr", "tts", "stream", "any"]) {
@@ -50,6 +60,137 @@ async function api(path, options) {
     throw new Error(message);
   }
   return response.json();
+}
+
+/* ── category grouping ── */
+/* 74 families / 225 packages is far too long for one flat list, so every model
+   list is rendered as collapsible per-category sections. The category values come
+   from the upstream model_specs; anything without a spec lands in "unknown". */
+const CATEGORY_LABELS = {
+  asr: "语音识别 ASR",
+  tts: "语音合成 TTS",
+  audio_generation: "音频生成",
+  voice_conversion: "音色转换",
+  audio_tools: "音频工具",
+  speech_analysis: "语音分析",
+  community: "社区模型",
+  unknown: "未分类",
+};
+const CATEGORY_ORDER = ["asr", "tts", "audio_generation", "voice_conversion", "audio_tools", "speech_analysis", "community", "unknown"];
+const expandedGroups = new Map(); // containerId -> Set(category)
+
+function categoryLabel(category) {
+  return CATEGORY_LABELS[category] || category || CATEGORY_LABELS.unknown;
+}
+
+function categoryRank(category) {
+  const index = CATEGORY_ORDER.indexOf(category);
+  return index < 0 ? CATEGORY_ORDER.length : index;
+}
+
+function groupState(containerId) {
+  if (!expandedGroups.has(containerId)) expandedGroups.set(containerId, new Set());
+  return expandedGroups.get(containerId);
+}
+
+/**
+ * Renders `entries` into `container` as collapsible per-category sections.
+ * A non-empty `filter` overrides the remembered collapse state so a search always
+ * shows its hits.
+ */
+function renderGroupedList(container, entries, config) {
+  const { categoryOf, renderItem, searchText, filter = "" } = config;
+  const state = groupState(container.id);
+  container.replaceChildren();
+
+  const needle = (filter || "").trim().toLowerCase();
+  const visible = needle
+    ? entries.filter(entry => String(searchText(entry) || "").toLowerCase().includes(needle))
+    : entries;
+
+  if (!visible.length) {
+    const empty = document.createElement("p");
+    empty.className = "group-empty";
+    empty.textContent = needle ? `无匹配项：${filter}` : (config.emptyText || "— empty —");
+    container.append(empty);
+    return { total: 0, shown: 0, groups: 0 };
+  }
+
+  const groups = new Map();
+  for (const entry of visible) {
+    const category = categoryOf(entry) || "unknown";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(entry);
+  }
+
+  const ordered = [...groups.keys()].sort((a, b) => categoryRank(a) - categoryRank(b) || a.localeCompare(b));
+  for (const category of ordered) {
+    const items = groups.get(category);
+    const open = needle ? true : state.has(category);
+
+    const section = document.createElement("section");
+    section.className = "group";
+    section.dataset.category = category;
+    section.dataset.collapsed = open ? "0" : "1";
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "group-head";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    caret.textContent = open ? "▾" : "▸";
+
+    const title = document.createElement("span");
+    title.className = "group-title";
+    title.textContent = categoryLabel(category);
+
+    const count = document.createElement("span");
+    count.className = "group-count";
+    count.textContent = config.groupCount
+      ? config.groupCount(category, items)
+      : `${items.length} 项`;
+
+    head.append(caret, title, count);
+    head.addEventListener("click", () => {
+      const collapsed = section.dataset.collapsed === "1";
+      section.dataset.collapsed = collapsed ? "0" : "1";
+      if (collapsed) state.add(category); else state.delete(category);
+      caret.textContent = collapsed ? "▾" : "▸";
+      head.setAttribute("aria-expanded", collapsed ? "true" : "false");
+    });
+
+    const body = document.createElement("div");
+    body.className = "group-body";
+    for (const entry of items) body.append(renderItem(entry));
+
+    section.append(head, body);
+    container.append(section);
+  }
+
+  return { total: entries.length, shown: visible.length, groups: ordered.length };
+}
+
+/** Expand/collapse every section of a group list, driven by its toggle button. */
+function wireGroupToggle(buttonId, containerId, label) {
+  const button = $(buttonId);
+  if (!button) return;
+  button.addEventListener("click", () => {
+    const container = $(containerId);
+    const sections = [...container.querySelectorAll(".group")];
+    if (!sections.length) return;
+    const anyCollapsed = sections.some(section => section.dataset.collapsed === "1");
+    const state = groupState(containerId);
+    for (const section of sections) {
+      const category = section.dataset.category;
+      section.dataset.collapsed = anyCollapsed ? "0" : "1";
+      section.querySelector(".caret").textContent = anyCollapsed ? "▾" : "▸";
+      section.querySelector(".group-head").setAttribute("aria-expanded", anyCollapsed ? "true" : "false");
+      if (anyCollapsed) state.add(category); else state.delete(category);
+    }
+    button.textContent = anyCollapsed ? "⊟ 全部折叠" : "⊞ 全部展开";
+  });
 }
 
 /* ── studio log ── */
@@ -141,24 +282,41 @@ function renderTaskCatalog(tasks) {
 }
 
 function renderLoaderCatalog(loaders) {
-  const lines = [];
-  for (const loader of loaders) {
-    const tasks = (loader.tasks || []).map(task => {
-      const modes = (task.modes || []).length ? ` (${task.modes.join("|")})` : "";
-      const token = task.canonical && task.canonical !== task.task ? `${task.canonical}<${task.task}` : task.task;
-      return `${token}${modes}`;
-    });
-    lines.push(`${loader.family}: ${tasks.join(", ")}`);
-    const flags = [
-      loader.supportsSpeakerReference ? "speaker-ref" : null,
-      loader.supportsStyleCondition ? "style-condition" : null,
-      loader.supportsTimestamps ? "timestamps" : null,
-    ].filter(Boolean);
-    if (flags.length || (loader.languages || []).length) {
-      lines.push(`             ${flags.join(" · ")}${flags.length && (loader.languages || []).length ? " · " : ""}${(loader.languages || []).join(", ")}`);
-    }
-  }
-  $("loaderCatalog").textContent = lines.join("\n") || "（无加载器）";
+  const container = $("loaderCatalog");
+  renderGroupedList(container, loaders, {
+    categoryOf: loader => loader.category,
+    searchText: loader => `${loader.family} ${loader.category || ""} ${(loader.tasks || []).map(t => t.task).join(" ")}`,
+    emptyText: "（无加载器：native shim 未编译任何模型家族）",
+    renderItem: loader => {
+      const item = document.createElement("div");
+      item.className = "loader-row";
+      item.title = (loader.languages || []).join(", ");
+
+      const name = document.createElement("span");
+      name.className = "loader-family";
+      name.textContent = loader.family;
+
+      const tasks = document.createElement("span");
+      tasks.className = "loader-tasks";
+      tasks.textContent = (loader.tasks || []).map(task => {
+        const modes = (task.modes || []).length ? ` (${task.modes.join("|")})` : "";
+        const token = task.canonical && task.canonical !== task.task ? `${task.canonical}<${task.task}` : task.task;
+        return `${token}${modes}`;
+      }).join(", ");
+
+      const flags = document.createElement("span");
+      flags.className = "loader-flags";
+      flags.textContent = [
+        loader.supportsSpeakerReference ? "speaker-ref" : null,
+        loader.supportsStyleCondition ? "style" : null,
+        loader.supportsTimestamps ? "timestamps" : null,
+        loader.instructionsPolicy && loader.instructionsPolicy !== "none" ? loader.instructionsPolicy : null,
+      ].filter(Boolean).join(" · ");
+
+      item.append(name, tasks, flags);
+      return item;
+    },
+  });
 }
 
 async function loadCatalog() {
@@ -241,35 +399,72 @@ async function loadPackages() {
     $("buildInfo").textContent = `shim ${build.shimVersion} · audio.cpp ${String(build.audioCppCommit).slice(0, 8)} · ${build.backend}`;
     led.className = "led on";
     const packages = data.packages ?? [];
-    $("packageCount").textContent = `${packages.length} packages`;
-    const list = $("packageList");
-    list.replaceChildren();
-    for (const pkg of packages) {
-      const item = document.createElement("li");
+    if (!data.modelManager && data.message) log("amber", data.message);
+    // Stable within-category order: family first, then package id.
+    packageCache = [...packages].sort((a, b) =>
+      String(a.family || "").localeCompare(String(b.family || "")) || a.id.localeCompare(b.id));
+    renderPackageList(packageCache);
+    log("info", `目录已加载：${packages.length} 个模型包`);
+  } catch (err) {
+    led.className = "led err";
+    $("buildInfo").textContent = "native runtime unavailable";
+    $("packageCount").textContent = "unavailable";
+    log("err", `加载模型目录失败：${err.message}`);
+  }
+}
+
+function renderPackageList(packages) {
+  const installed = packages.filter(pkg => pkg.installed).length;
+  const summary = renderGroupedList($("packageList"), packages, {
+    categoryOf: pkg => pkg.category,
+    filter: $("packageFilter").value,
+    searchText: pkg => `${pkg.id} ${pkg.family || ""} ${pkg.category || ""}`,
+    emptyText: "（模型包目录为空：native 构建未启用 model manager）",
+    groupCount: (category, items) => {
+      const ready = items.filter(pkg => pkg.installed).length;
+      return ready ? `${items.length} 项 · ${ready} 已装` : `${items.length} 项`;
+    },
+    renderItem: pkg => {
+      const item = document.createElement("div");
       item.className = "pkg";
+      item.title = pkg.message || pkg.id;
+
       const dot = document.createElement("span");
       dot.className = `led ${pkg.installed ? "on" : "off"}`;
+
       const id = document.createElement("span");
       id.className = "id";
       id.textContent = pkg.id;
+
+      const family = document.createElement("span");
+      family.className = "pkg-family";
+      family.textContent = pkg.family ? `${pkg.family}` : "";
+      if (pkg.sizeBytes) family.textContent += family.textContent ? ` · ${formatBytes(pkg.sizeBytes)}` : formatBytes(pkg.sizeBytes);
+
       const state = document.createElement("span");
       state.className = `pkg-state ${pkg.installed ? "ok" : ""}`;
       state.textContent = pkg.installed ? "READY" : "AVAILABLE";
+
       const install = document.createElement("button");
       install.className = "btn btn-mini";
       install.type = "button";
       install.textContent = pkg.installed ? "REINSTALL" : "INSTALL";
       install.addEventListener("click", () => downloadPackage(pkg.id, install));
-      item.append(dot, id, state, install);
-      list.append(item);
-    }
-    if (!data.modelManager && data.message) log("amber", data.message);
-    log("info", `目录已加载：${packages.length} 个模型包`);
-  } catch (err) {
-    led.className = "led err";
-    $("buildInfo").textContent = "native runtime unavailable";
-    log("err", `加载模型目录失败：${err.message}`);
-  }
+
+      item.append(dot, id, family, state, install);
+      return item;
+    },
+  });
+  $("packageCount").textContent = `${summary.shown}/${summary.total} 包 · ${installed} 已安装 · ${summary.groups} 类`;
+}
+
+function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let size = bytes, unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+  return `${size.toFixed(size >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 async function downloadPackage(packageId, button) {
@@ -296,38 +491,67 @@ async function downloadPackage(packageId, button) {
 $("refreshPackages").addEventListener("click", loadPackages);
 
 /* ── detected local models ── */
+const TASK_LABELS = {
+  asr: "语音识别", tts: "语音合成", vad: "语音活动检测", diar: "说话人日志", sep: "音源分离",
+  gen: "音频生成", clon: "音色克隆", vc: "音色转换", s2s: "语音转换", align: "强制对齐",
+  vdes: "音色设计", spk: "说话人识别", svc: "歌声转换", midi: "MIDI 提取",
+  music: "歌词/音乐生成", unknown: "未识别任务",
+};
+
 async function loadModels() {
   try {
     const models = await api("/api/models");
     localModels = models;
-    models.sort((a, b) => (a.task || "unknown").localeCompare(b.task || "unknown") || a.name.localeCompare(b.name));
     $("modelCount").textContent = `${models.length} folders`;
-    const list = $("modelList");
-    list.replaceChildren();
-    for (const entry of models) {
-      const item = document.createElement("li");
+    renderModelList(models);
+  } catch (err) {
+    $("modelCount").textContent = "unavailable";
+    log("err", `扫描本地模型失败：${err.message}`);
+  }
+}
+
+function renderModelList(models) {
+  const verified = models.filter(entry => entry.complete).length;
+  const summary = renderGroupedList($("modelList"), models, {
+    categoryOf: entry => entry.category,
+    filter: $("modelFilter").value,
+    searchText: entry => `${entry.name} ${entry.family || ""} ${entry.packageId || ""} ${entry.category || ""}`,
+    emptyText: "（模型安装目录下没有子目录）",
+    groupCount: (category, items) => {
+      const ok = items.filter(entry => entry.complete).length;
+      return ok === items.length ? `${items.length} 项 · 全部完整` : `${items.length} 项 · ${ok} 完整`;
+    },
+    renderItem: entry => {
+      const item = document.createElement("div");
       item.className = "mdl";
       item.title = entry.path;
+
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = entry.name;
+
       const ggufs = document.createElement("span");
       ggufs.className = "ggufs";
-      ggufs.textContent = (entry.models ?? []).length ? entry.models.join(" · ") : "no gguf";
+      ggufs.textContent = (entry.models ?? []).length
+        ? `${(entry.models ?? []).join(" · ")}${entry.installedBytes ? ` · ${formatBytes(entry.installedBytes)}` : ""}`
+        : "no gguf";
+
       const badge = document.createElement("span");
       badge.className = entry.manifest === false ? "mdl-badge raw" : (entry.complete ? "mdl-badge ok" : "mdl-badge bad");
       badge.textContent = entry.manifest === false ? "unmanaged" : (entry.complete ? "✓ complete" : "✗ incomplete");
       badge.title = entry.issues || "package manifest verification";
+
       const meta = document.createElement("span");
       meta.className = "mdl-meta";
-      const taskLabels = { asr: "语音识别", tts: "语音合成", vad: "语音活动检测", music: "歌词/音乐生成", unknown: "未识别任务" };
       const canonical = (entry.canonicalTasks || []).join(", ");
-      meta.textContent = `${taskLabels[entry.task] || entry.task || taskLabels.unknown} · ${(entry.family || "待推断")} · ${(entry.languages || []).join(", ") || "语言未知"}${canonical ? ` · 可跑任务 ${canonical}` : ""}`;
+      meta.textContent = `${TASK_LABELS[entry.task] || entry.task || TASK_LABELS.unknown} · ${entry.family || "待推断"} · ${(entry.languages || []).join(", ") || "语言未知"}${canonical ? ` · 可跑任务 ${canonical}` : ""}`;
+
       const verify = document.createElement("button");
       verify.className = "btn btn-mini";
       verify.type = "button";
       verify.textContent = "VERIFY";
       verify.addEventListener("click", (event) => { event.stopPropagation(); verifyModel(entry.path, verify); });
+
       item.append(name, meta, ggufs, badge, verify);
       item.addEventListener("click", () => {
         // Keep the generic console pointed at whatever was clicked; the dedicated
@@ -337,7 +561,7 @@ async function loadModels() {
         const dedicated = ["asr", "tts"].includes(entry.task) ? entry.task : null;
         showTask(dedicated ?? "any");
         describeModel(entry);
-        list.querySelectorAll(".mdl").forEach(node => node.classList.toggle("selected", node === item));
+        $( "modelList").querySelectorAll(".mdl").forEach(node => node.classList.toggle("selected", node === item));
         if (!dedicated) {
           log("info", `${entry.name} → 通用任务控制台（${entry.task || "未识别任务"}）`);
           return;
@@ -351,14 +575,17 @@ async function loadModels() {
       item.addEventListener("keydown", event => {
         if (event.target === item && ["Enter", " "].includes(event.key)) { event.preventDefault(); item.click(); }
       });
-      list.append(item);
-    }
-  } catch (err) {
-    log("err", `扫描本地模型失败：${err.message}`);
-  }
+      return item;
+    },
+  });
+  $("modelCount").textContent = `${summary.shown}/${summary.total} 目录 · ${verified} 校验通过 · ${summary.groups} 类`;
 }
 
 $("refreshModels").addEventListener("click", loadModels);
+$("modelFilter").addEventListener("input", () => renderModelList(localModels));
+$("packageFilter").addEventListener("input", () => renderPackageList(packageCache));
+wireGroupToggle("toggleModels", "modelList");
+wireGroupToggle("togglePackages", "packageList");
 
 /* ── per-model package verification ── */
 async function verifyModel(path, button) {

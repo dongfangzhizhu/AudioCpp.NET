@@ -1,13 +1,45 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+
+    <PackageId>AudioCpp.NET</PackageId>
+    <Description>.NET bindings for the audio.cpp speech engine (ASR, TTS voice cloning, VAD and 70+ model families) over a versioned C ABI shim. Reference this package plus exactly one native runtime package (AudioCpp.NET.Runtime for CPU, AudioCpp.NET.Runtime.Cuda for NVIDIA GPUs).</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!--
+      CS1591: the public surface is documented as it goes, but not every member has
+      a doc comment yet. Surface the file without failing the release build on it.
+    -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!-- Ship the interop layer inside this package (see the target below). -->
+    <TargetsForTfmSpecificBuildOutput>$(TargetsForTfmSpecificBuildOutput);AddProjectReferenceAssemblies</TargetsForTfmSpecificBuildOutput>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\AudioCpp.NET.Interop\AudioCpp.NET.Interop.csproj" />
   </ItemGroup>
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\docs\nuget\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <!--
+    AudioCpp.NET.Interop is an implementation detail: it is not published on its own,
+    so its assembly is folded into lib/<tfm>/ of this package instead of surfacing as
+    a package dependency the consumer would have to resolve.
+  -->
+  <Target Name="AddProjectReferenceAssemblies" DependsOnTargets="ResolveReferences">
+    <ItemGroup>
+      <BuildOutputInPackage Include="@(ReferenceCopyLocalPaths)"
+                            Condition="'%(ReferenceCopyLocalPaths.ReferenceSourceTarget)' == 'ProjectReference'" />
+    </ItemGroup>
+  </Target>
 
 </Project>

@@ -1,0 +1,8 @@
+<Project>
+
+  <!-- See AudioCpp.NET.Runtime.props: cumulative registration for the conflict guard. -->
+  <ItemGroup>
+    <AudioCppNativeRuntime Include="cuda" />
+  </ItemGroup>
+
+</Project>

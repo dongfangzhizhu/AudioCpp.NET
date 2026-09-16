@@ -2,9 +2,14 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      Implementation detail of AudioCpp.NET: packed as its own assembly only if it
+      ever needs to stand alone. Today its output is folded into the AudioCpp.NET
+      package, so publishing it separately would create two ways to get one type.
+    -->
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
 </Project>

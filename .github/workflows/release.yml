@@ -1,0 +1,205 @@
+name: release
+
+# Builds the NuGet packages and pushes them to nuget.org.
+#
+# Two entry points:
+#
+#   * push a version tag (v0.1.0)  -> published automatically
+#   * workflow_dispatch            -> same, with the version and target overridable
+#                                     and a switch to build without publishing
+#
+# The managed package (AudioCpp.NET) is built from source and always ships.
+#
+# The two runtime packages carry prebuilt native shims, which cannot be built on a
+# GitHub-hosted runner: a full-set shim needs the audio.cpp toolchain, and the CUDA
+# one needs an NVIDIA toolkit and GPU. They are therefore assembled from native
+# archives attached to a GitHub Release, produced by
+# eng/packaging/make-native-archives.ps1 on a machine that can build them. If those
+# archives are absent the runtime packages are skipped with a warning and the release
+# still proceeds for the managed package.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, e.g. 0.1.0 (must match the native archives).'
+        required: true
+      native_release_tag:
+        description: 'Release tag holding the audiocpp-native-*.zip assets. Defaults to v<version>.'
+        required: false
+      publish:
+        description: 'Push to nuget.org. Leave unchecked to only build and inspect.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  resolve:
+    name: resolve version and native availability
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      version_ok: ${{ steps.v.outputs.version_ok }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - id: v
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TAG: ${{ inputs.native_release_tag }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "push" ]; then
+            # v0.1.0 -> 0.1.0
+            version="${REF_NAME#v}"
+            tag="$REF_NAME"
+            publish="true"
+          else
+            version="$INPUT_VERSION"
+            tag="${INPUT_TAG:-v$INPUT_VERSION}"
+            publish="${INPUT_PUBLISH:-false}"
+          fi
+          test -n "$version" || { echo "no version resolved"; exit 1; }
+          # SemVer sanity: a malformed version would only fail deep inside pack.
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'$version' is not a SemVer version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"       >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "resolved: version=$version tag=$tag publish=$publish"
+
+  verify:
+    name: managed tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore, build, test
+        run: |
+          dotnet restore AudioCpp.NET.slnx
+          dotnet build AudioCpp.NET.slnx -c Release --no-restore
+          dotnet test tests/AudioCpp.NET.Tests -c Release --no-build --nologo
+
+  pack:
+    name: pack
+    needs: [resolve, verify]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Fetch native shim archives from the release
+        id: natives
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p native-archives
+          gh release download "${{ needs.resolve.outputs.tag }}" \
+             --repo "${{ github.repository }}" \
+             --pattern 'audiocpp-native-*.zip' \
+             --dir native-archives
+          ls -la native-archives
+
+      - name: Stage native shims
+        if: steps.natives.outcome == 'success'
+        run: bash eng/packaging/import-native-archives.sh native-archives
+
+      - name: Warn when runtime packages must be skipped
+        if: steps.natives.outcome != 'success'
+        run: |
+          echo "::warning title=Native archives unavailable::No audiocpp-native-*.zip on release '${{ needs.resolve.outputs.tag }}'. Publishing the managed package only. Build and attach the native archives (eng/packaging/make-native-archives.ps1) and re-run to publish AudioCpp.NET.Runtime and AudioCpp.NET.Runtime.Cuda."
+
+      - name: Pack
+        run: |
+          set -euo pipefail
+          V="${{ needs.resolve.outputs.version }}"
+          mkdir -p packages
+          dotnet pack src/AudioCpp.NET/AudioCpp.NET.csproj -c Release -o packages -p:Version="$V"
+          if [ "${{ steps.natives.outcome }}" = "success" ]; then
+            dotnet pack src/AudioCpp.NET.Runtime/AudioCpp.NET.Runtime.csproj -c Release -o packages -p:Version="$V"
+            dotnet pack src/AudioCpp.NET.Runtime.Cuda/AudioCpp.NET.Runtime.Cuda.csproj -c Release -o packages -p:Version="$V"
+          fi
+          echo "--- produced ---"
+          ls -la packages
+
+      # Asserts the artifacts really contain the natives and the interop assembly,
+      # so a packaging regression fails here instead of at a consumer's first run.
+      - name: Verify package contents
+        run: bash eng/packaging/verify-packages.sh packages "${{ steps.natives.outcome }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: |
+            packages/*.nupkg
+            packages/*.snupkg
+          if-no-files-found: error
+
+  publish:
+    name: push to nuget.org
+    needs: [resolve, pack]
+    if: needs.resolve.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+          path: packages
+
+      - name: Check for an API key
+        run: |
+          if [ -z "${{ secrets.NUGET_API_KEY }}" ]; then
+            echo "::error title=Missing NUGET_API_KEY::Add a nuget.org API key as the repository secret NUGET_API_KEY."
+            exit 1
+          fi
+
+      # --skip-duplicate keeps a re-run idempotent: a partially published release can
+      # be retried without failing on the packages that already landed.
+      - name: Push packages
+        run: |
+          set -euo pipefail
+          dotnet nuget push "packages/*.nupkg" \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          for s in packages/*.snupkg; do
+            [ -e "$s" ] || continue
+            dotnet nuget push "$s" \
+              --api-key "${{ secrets.NUGET_API_KEY }}" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published ${{ needs.resolve.outputs.version }}"
+            echo
+            echo '```'
+            unzip -l packages/AudioCpp.NET.*.nupkg | head -20
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
