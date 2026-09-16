@@ -30,8 +30,9 @@
 # Overridable via env: AUDIOCPP_MATRIX_ROOT, AUDIOCPP_UPSTREAM, AUDIOCPP_FIXTURE_SRC
 set -uo pipefail
 
-SRC=/mnt/d/SouceCode/python2net/audio
-REPO=$SRC/audiocpp-dotnet
+# Derived from this script's location so the checkout can live anywhere.
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+SRC=${AUDIOCPP_SRC:-$(dirname "$REPO")}
 A=$REPO/build/artifacts
 M=${AUDIOCPP_MATRIX_ROOT:-$HOME/audio-matrix}
 PIN=78d47706c30ef215ba9ad3559baff309efeb5260

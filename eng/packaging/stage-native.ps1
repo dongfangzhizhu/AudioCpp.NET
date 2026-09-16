@@ -21,11 +21,21 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$repo = "D:\SouceCode\python2net\audio\audiocpp-dotnet"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if ([string]::IsNullOrWhiteSpace($Staging)) { $Staging = "$repo\build\nuget-staging" }
 
 # Must match AUDIOCPP_MATRIX_ROOT in eng/matrix/linux-full-matrix.sh.
-$wslRoot = "/home/spider/audio-matrix"
+$wslRoot = if ($env:AUDIOCPP_MATRIX_ROOT) { $env:AUDIOCPP_MATRIX_ROOT } else { "/home/$env:USERNAME/audio-matrix" }
+
+# Translate a Windows path under this checkout into its /mnt/<drive>/ WSL equivalent.
+function ConvertTo-WslPath([string]$WindowsPath) {
+    $full = (Resolve-Path $WindowsPath -ErrorAction SilentlyContinue).Path
+    if (-not $full) { $full = $WindowsPath }
+    if ($full -match '^([A-Za-z]):\\(.*)$') {
+        return "/mnt/$($Matches[1].ToLower())/$($Matches[2] -replace '\\', '/')"
+    }
+    return $full -replace '\\', '/'
+}
 
 function Invoke-Stage([string]$backend) {
     $dest = "$Staging\$backend"
@@ -50,9 +60,9 @@ function Invoke-Stage([string]$backend) {
         return
     }
 
-    # Fall back to the WSL build tree; WSL can write back through /mnt/d.
+    # Fall back to the WSL build tree; WSL can write back through /mnt/<drive>.
     $wslSrc = "$wslRoot/build-linux-$backend/$linuxName"
-    $wslDest = "/mnt/d/SouceCode/python2net/audio/audiocpp-dotnet/build/nuget-staging/$backend/linux-x64/$linuxName"
+    $wslDest = "$(ConvertTo-WslPath $Staging)/$backend/linux-x64/$linuxName"
     & wsl.exe -d Debian -- bash -c "test -f '$wslSrc' && cp '$wslSrc' '$wslDest' && echo COPIED || echo MISSING" 2>$null | Out-Null
     if (Test-Path "$dest\linux-x64\$linuxName") {
         Write-Output ("  linux-x64 : {0,7:N1} MiB  $wslSrc (from WSL)" -f ((Get-Item "$dest\linux-x64\$linuxName").Length/1MB))

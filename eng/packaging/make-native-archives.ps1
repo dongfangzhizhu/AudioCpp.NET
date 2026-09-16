@@ -23,7 +23,7 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$repo = "D:\SouceCode\python2net\audio\audiocpp-dotnet"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repo
 
 if ([string]::IsNullOrWhiteSpace($OutputDir)) { $OutputDir = "$repo\build\native-archives" }

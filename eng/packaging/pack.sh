@@ -87,6 +87,17 @@ for project in "${projects[@]}"; do
 done
 
 echo
+echo "=== verifying package layout ==="
+if command -v python3 >/dev/null 2>&1; then PY=python3; else PY=python; fi
+if command -v "$PY" >/dev/null 2>&1; then
+  "$PY" "$REPO/eng/packaging/verify_packages.py" "$OUT" --natives staged \
+    || { echo "!!! PACKAGE VERIFICATION FAILED"; failed=$((failed + 1)); }
+else
+  echo "!!! python not found; skipping package verification"
+  failed=$((failed + 1))
+fi
+
+echo
 echo "=== packages in $OUT ==="
 ls -la "$OUT"/*.nupkg "$OUT"/*.snupkg 2>/dev/null | awk '{printf "  %-46s %10s B\n", $9, $5}'
 

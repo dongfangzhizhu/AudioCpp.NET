@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Continue"
 
-$repo = "D:\SouceCode\python2net\audio\audiocpp-dotnet"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repo
 
 if ([string]::IsNullOrWhiteSpace($OutputDir)) { $OutputDir = "$repo\build\nuget" }
@@ -48,7 +48,17 @@ foreach ($project in $projects) {
 
 Write-Output ""
 Write-Output "=== verifying package layout ==="
-& bash "$repo\eng\packaging\verify-packages.sh" "$OutputDir" "success"
+# Done in Python, not bash: the PowerShell tool refuses to spawn a non-PowerShell
+# shell, and a backslash path handed to bash gets mangled to "D:SouceCode...".
+$python = (Get-Command python -ErrorAction SilentlyContinue).Source
+if (-not $python) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
+if (-not $python) {
+    Write-Output "!!! python not found on PATH; skipping package verification"
+    $failed++
+} else {
+    & $python "$repo\eng\packaging\verify_packages.py" $OutputDir --natives staged
+    if ($LASTEXITCODE -ne 0) { Write-Output "!!! PACKAGE VERIFICATION FAILED (exit $LASTEXITCODE)"; $failed++ }
+}
 
 Write-Output ""
 Write-Output "=== packages in $OutputDir ==="

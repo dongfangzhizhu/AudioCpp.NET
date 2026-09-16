@@ -1,4 +1,4 @@
-# Windows full-set matrix: configure (optional) + build + smoke + real-inference e2e
+﻿# Windows full-set matrix: configure (optional) + build + smoke + real-inference e2e
 # + managed tests, for BOTH backends, with AUDIOCPP_MODEL_SET=full.
 #
 # Mirrors eng/matrix/linux-full-matrix.sh so the two OS halves of the test matrix
@@ -32,12 +32,14 @@ param(
 # Native tools write progress to stderr; "Stop" would abort on the first warning.
 $ErrorActionPreference = "Continue"
 
-$vs = "C:\Program Files\Microsoft Visual Studio\18\Professional"
+# Visual Studio install to enter. Override with AUDIOCPP_VS when yours differs.
+$vs = if ($env:AUDIOCPP_VS) { $env:AUDIOCPP_VS } else { "C:\Program Files\Microsoft Visual Studio\18\Professional" }
 Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64" | Out-Null
 
-$repo   = "D:\SouceCode\python2net\audio\audiocpp-dotnet"
-$src    = "D:\SouceCode\python2net\audio\audio-pinned"
+$repo   = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+# Pinned upstream checkout. Override with AUDIOCPP_UPSTREAM when it lives elsewhere.
+$src    = if ($env:AUDIOCPP_UPSTREAM) { $env:AUDIOCPP_UPSTREAM } else { (Join-Path $repo "..\audio-pinned") }
 $A      = "$repo\build\artifacts"
 $boring = "$repo\build\deps\boringssl-src"
 

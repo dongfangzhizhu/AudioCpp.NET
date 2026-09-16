@@ -19,7 +19,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\AudioCpp.NET.Interop\AudioCpp.NET.Interop.csproj" />
+    <!--
+      PrivateAssets="all" suppresses the generated <dependency id="AudioCpp.NET.Interop" />.
+      That project is IsPackable=false and never published, so a declared dependency on it
+      would be unresolvable for consumers (NU1101). The assembly itself still ships inside
+      lib/<tfm>/ via the AddProjectReferenceAssemblies target below.
+    -->
+    <ProjectReference Include="..\AudioCpp.NET.Interop\AudioCpp.NET.Interop.csproj" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>

@@ -15,8 +15,7 @@
 #   ref     : clone reference WAV (default the 142 s jinguling clip)
 set -uo pipefail
 
-SRC=/mnt/d/SouceCode/python2net/audio
-REPO=$SRC/audiocpp-dotnet
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 A=$REPO/build/artifacts
 M=${AUDIOCPP_MATRIX_ROOT:-$HOME/audio-matrix}
 THREADS=${1:-4}

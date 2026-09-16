@@ -1,4 +1,4 @@
-# Configure one Windows backend with the FULL model set (all 71 model targets).
+﻿# Configure one Windows backend with the FULL model set (all 71 model targets).
 # Uses the VS Developer environment + Ninja so no cmd.exe is involved.
 param(
     [string]$Backend = "cpu",
@@ -7,12 +7,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$vs = "C:\Program Files\Microsoft Visual Studio\18\Professional"
+# Visual Studio install to enter. Override with AUDIOCPP_VS when yours differs.
+$vs = if ($env:AUDIOCPP_VS) { $env:AUDIOCPP_VS } else { "C:\Program Files\Microsoft Visual Studio\18\Professional" }
 Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64" | Out-Null
 
-$repo = "D:\SouceCode\python2net\audio\audiocpp-dotnet"
-$src = "D:\SouceCode\python2net\audio\audio-pinned"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+# Pinned upstream checkout. Override with AUDIOCPP_UPSTREAM when it lives elsewhere.
+$src = if ($env:AUDIOCPP_UPSTREAM) { $env:AUDIOCPP_UPSTREAM } else { (Resolve-Path (Join-Path $repo "..\audio-pinned") -ErrorAction SilentlyContinue).Path }
+if ([string]::IsNullOrWhiteSpace($src)) { $src = (Join-Path $repo "..\audio-pinned") }
 # Offline BoringSSL source cache: FetchContent reaching github.com is unreliable
 # here, so the tree is kept under build\deps and reused via FETCHCONTENT_SOURCE_DIR.
 $boring = "$repo\build\deps\boringssl-src"

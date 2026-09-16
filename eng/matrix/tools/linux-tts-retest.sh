@@ -10,8 +10,7 @@
 # Usage: linux-tts-retest.sh <cpu|cuda> [max_tokens]
 set -uo pipefail
 
-SRC=/mnt/d/SouceCode/python2net/audio
-REPO=$SRC/audiocpp-dotnet
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 A=$REPO/build/artifacts
 M=${AUDIOCPP_MATRIX_ROOT:-$HOME/audio-matrix}
 BACK=${1:-cpu}

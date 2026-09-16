@@ -1,4 +1,4 @@
-# Build one Windows backend build tree inside the VS developer environment.
+﻿# Build one Windows backend build tree inside the VS developer environment.
 # Ninja is used for generation, but MSVC still needs INCLUDE/LIB from vcvars,
 # which is exactly what Enter-VsDevShell provides without invoking cmd.exe.
 param(
@@ -12,11 +12,12 @@ param(
 # first warning line. Exit codes are checked explicitly instead.
 $ErrorActionPreference = "Continue"
 
-$vs = "C:\Program Files\Microsoft Visual Studio\18\Professional"
+# Visual Studio install to enter. Override with AUDIOCPP_VS when yours differs.
+$vs = if ($env:AUDIOCPP_VS) { $env:AUDIOCPP_VS } else { "C:\Program Files\Microsoft Visual Studio\18\Professional" }
 Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
 Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64" | Out-Null
 
-$repo = "D:\SouceCode\python2net\audio\audiocpp-dotnet"
+$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 if ([string]::IsNullOrWhiteSpace($BuildDir)) { $BuildDir = "$repo\build\native-$Backend" }
 
 Remove-Item Env:http_proxy -ErrorAction SilentlyContinue
