@@ -29,7 +29,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="all" />
+    <!--
+      Pinned to the SDK feature band in global.json (10.0.400, rollForward
+      latestFeature). 8.0.0 pulled in Microsoft.Build.Tasks.Git 8.0.0, which
+      NuGet audit reports as GHSA-23fw-v26w-5fgq, and TreatWarningsAsErrors turns
+      that NU1902 into a restore failure.
+    -->
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.401" PrivateAssets="all" />
   </ItemGroup>
 
   <ItemGroup>
