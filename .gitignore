@@ -16,6 +16,13 @@ artifacts/
 *.nupkg
 *.snupkg
 
+# Python bytecode from the eng/ helper scripts
+__pycache__/
+*.py[cod]
+
+# A GitHub token handed to eng/release/publish-github.py must never be committed
+.github-token
+
 # Pinned upstream checkouts and generated comparison reports
 upstream/
 upstream-*-report.md
