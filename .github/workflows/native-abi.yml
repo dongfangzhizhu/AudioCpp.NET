@@ -100,6 +100,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SMOKE=$(find build/native-ci -name 'audiocpp_dotnet_abi_smoke*' -type f -not -name '*.pdb' | head -1)
+          # Match the executable by exact name, and prune MSBuild's *.dir
+          # intermediate trees. The previous pattern 'audiocpp_dotnet_abi_smoke*'
+          # also matched
+          #   audiocpp_dotnet_abi_smoke.dir/Release/*.tlog/audiocpp_dotnet_abi_smoke.lastbuildstate
+          # and find returned that first, so bash tried to execute an MSBuild tlog
+          # as a script -- "line 2: Release: command not found", exit 127. Ninja
+          # (Linux) writes the binary flat and has no such intermediates, which is
+          # why only Windows failed.
+          SMOKE=$(find build/native-ci \
+                    -type d -name '*.dir' -prune -o \
+                    -type f \( -name 'audiocpp_dotnet_abi_smoke' \
+                               -o -name 'audiocpp_dotnet_abi_smoke.exe' \) -print \
+                  | head -1)
+          test -n "$SMOKE" || { echo "could not locate the ABI smoke binary"; exit 1; }
           echo "running $SMOKE"
           "$SMOKE"
