@@ -168,11 +168,49 @@ def main() -> int:
         die(f"取远端提交失败 HTTP {st}: {err(base)}")
     base_tree = base["tree"]["sha"]
 
-    # 远端是否已经是本地的祖先——不是的话推进分支会丢提交，必须停下
-    st, cmp = api("GET", f"/repos/{owner}/{name}/compare/{remote_sha}...{local_sha}", token)
-    if st == 200 and cmp.get("status") not in ("ahead", "identical"):
-        die(f"远端与本地已分叉（status={cmp.get('status')}），"
-            "API 推送只做 fast-forward，请先用 git 处理")
+    # 远端内容已经和本地 HEAD 一致，只是提交身份不同（上一次 API 推送的产物）：
+    # 没有东西可推，也不该判成分叉。
+    if git(repo, "rev-parse", "HEAD^{tree}").strip() == base_tree:
+        info(f"本地 HEAD 与远端 {remote_sha[:12]} 内容一致（仅提交身份不同），无需推送")
+        return 0
+
+    # 防丢提交守卫。
+    #
+    # 不能用 compare API：它要求两个提交都存在于远端，而本地刚做的那次提交恰恰
+    # 还没推上去，于是只会拿到 404（status=None），判断不出任何东西。
+    #
+    # 分两步：
+    #   1. 如果远端提交的对象在本地存在（常规情况），直接用本地祖先判断；
+    #   2. 否则比较**树**——上一次用本工具推送会生成内容相同但 SHA 不同的提交，
+    #      于是两条链"分叉"。此时只要远端的树等于本地父提交的树，就说明远端已含
+    #      等价改动，把新提交挂上去不会丢东西。
+    def git_ok(*a: str) -> bool:
+        return subprocess.run(["git", "-C", str(repo), *a],
+                              capture_output=True).returncode == 0
+
+    ahead = False
+    if git_ok("cat-file", "-e", remote_sha):
+        if git_ok("merge-base", "--is-ancestor", remote_sha, local_sha):
+            ahead = True
+            info(f"远端 {remote_sha[:12]} 是本地 HEAD 的祖先，正常前进")
+
+    if not ahead:
+        try:
+            parent = git(repo, "rev-parse", "HEAD^").strip()
+        except SystemExit:
+            parent = ""
+        if parent and git_ok("cat-file", "-e", parent):
+            # 父提交的树必须在**本地**算：它是本地专有的提交，远端没有这个对象，
+            # 向 /git/commits/{sha} 查只会得到 404。
+            local_parent_tree = git(repo, "rev-parse", f"{parent}^{{tree}}").strip()
+            if local_parent_tree == base["tree"]["sha"]:
+                ahead = True
+                info(f"远端 {remote_sha[:12]} 与本地父提交 {parent[:12]} 内容一致"
+                     "（SHA 不同，上一次 API 推送造成），按等价基线继续")
+
+    if not ahead:
+        die(f"远端 {remote_sha[:12]} 既不是本地 HEAD 的祖先，内容也不与本地父提交等价，"
+            "继续推进会丢掉远端提交。请先用 git 处理分叉。")
 
     st, rtree = api("GET", f"/repos/{owner}/{name}/git/trees/{base_tree}?recursive=1", token)
     if st != 200:

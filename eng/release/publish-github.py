@@ -240,18 +240,28 @@ def git_setup_remote(repo_dir: pathlib.Path, slug: str, token: str, dry: bool) -
 
 
 def git_push(repo_dir: pathlib.Path, refspec: str, token: str, slug: str) -> None:
-    """带令牌推送，令牌只存在于本次进程的参数里，不落盘。"""
+    """带令牌推送，令牌只存在于本次进程的参数里，不落盘。
+
+    强制打开 TLS 校验：本机全局配置里 http.sslverify=false（多半是为了某个
+    内网镜像），但带着令牌推送时不该关掉证书校验。只有当代理确实做了 TLS
+    拦截时才用 AUDIOCPP_GIT_INSECURE=1 放行。
+    """
     clean_url = f"https://github.com/{slug}.git"
     run(["git", "remote", "set-url", "origin", clean_url], cwd=repo_dir, check=False)
     if DRY:
         info(f"DRY-RUN 会推送 {refspec} 到 {clean_url}")
         return
+    insecure = os.environ.get("AUDIOCPP_GIT_INSECURE", "") not in ("", "0")
+    if insecure:
+        warn("AUDIOCPP_GIT_INSECURE 已设置：本次推送跳过 TLS 证书校验")
+    b64 = __import__("base64").b64encode(f"x-access-token:{token}".encode()).decode()
     proc = subprocess.run(
         [
             "git",
             "-c",
-            f"http.https://github.com/.extraheader=Authorization: Basic "
-            f"{__import__('base64').b64encode(f'x-access-token:{token}'.encode()).decode()}",
+            f"http.sslverify={'false' if insecure else 'true'}",
+            "-c",
+            f"http.https://github.com/.extraheader=Authorization: Basic {b64}",
             "push",
             clean_url,
             refspec,
@@ -278,17 +288,18 @@ def find_release(owner: str, name: str, tag: str, token: str):
     return d if st == 200 else None
 
 
-def create_release(owner: str, name: str, tag: str, token: str, notes: str, prerelease: bool) -> dict:
+def create_release(owner: str, name: str, tag: str, token: str, notes: str,
+                   prerelease: bool, draft: bool = False) -> dict:
     st, _, d = api("GET", f"{API}/repos/{owner}/{name}/releases/tags/{tag}", token)
     if st == 200:
-        info(f"Release {tag} 已存在: {d['html_url']}")
+        info(f"Release {tag} 已存在: {d['html_url']}{' (draft)' if d.get('draft') else ''}")
         return d
-    info(f"创建 Release {tag}")
+    info(f"创建{'草稿 ' if draft else ''}Release {tag}")
     body = {
         "tag_name": tag,
         "name": tag,
         "body": notes,
-        "draft": False,
+        "draft": draft,
         "prerelease": prerelease,
     }
     st, _, d = api("POST", f"{API}/repos/{owner}/{name}/releases", token, body=body)
@@ -296,6 +307,16 @@ def create_release(owner: str, name: str, tag: str, token: str, notes: str, prer
         die(f"创建 Release 失败 HTTP {st}: {err_text(d)}")
     info(f"Release 已创建: {d['html_url']}")
     return d
+
+
+def publish_release(owner: str, name: str, release_id: int, tag: str, token: str) -> None:
+    """把草稿 Release 转为已发布。这一步才会创建标签、触发工作流。"""
+    info(f"发布 Release {tag}（草稿 -> 正式，此时才创建标签并触发工作流）")
+    st, _, d = api("PATCH", f"{API}/repos/{owner}/{name}/releases/{release_id}",
+                   token, body={"draft": False})
+    if st != 200:
+        die(f"发布 Release 失败 HTTP {st}: {err_text(d)}")
+    info(f"Release 已发布: {d['html_url']}")
 
 
 def upload_assets(owner: str, name: str, release: dict, assets_dir: pathlib.Path, token: str) -> int:
@@ -384,6 +405,9 @@ def main() -> int:
     ap.add_argument("--push", action="store_true", help="推送 --branch 到 origin")
     ap.add_argument("--tag", default="", help="要创建并推送的标签，例如 v0.1.0")
     ap.add_argument("--release", action="store_true", help="创建 GitHub Release")
+    ap.add_argument("--draft-first", action="store_true",
+                    help="先建草稿 Release、传完附件再转正式。草稿不会创建标签，"
+                         "所以不会在附件就位前触发依赖附件的工作流（release.yml）。")
     ap.add_argument("--assets", default="", help="Release 附件目录（上传其中的 *.zip）")
     ap.add_argument("--notes-file", default="", help="Release 说明文件")
     ap.add_argument("--prerelease", action="store_true", help="标记为预发布")
@@ -426,25 +450,36 @@ def main() -> int:
     if args.push:
         git_push(repo_dir, f"{args.branch}:{args.branch}", token, slug)
 
-    if args.tag:
-        tags = run(["git", "tag", "--list", args.tag], cwd=repo_dir, check=False).stdout.strip()
-        if tags:
-            info(f"标签已存在: {args.tag}")
+    # Secret 必须最先写：release.yml 的 publish 任务在缺 NUGET_API_KEY 时是硬失败
+    # （直接 exit 1），晚于标签触发就白跑一次。
+    for spec in args.set_secret:
+        if "=" in spec:
+            k, v = spec.split("=", 1)
         else:
-            info(f"创建标签 {args.tag}")
-            run(["git", "tag", "-a", args.tag, "-m", args.tag], cwd=repo_dir)
-        git_push(repo_dir, f"refs/tags/{args.tag}", token, slug)
+            # 只给名字时从环境变量读，避免密钥出现在命令行参数（进程列表可见）
+            k, v = spec, os.environ.get(spec, "")
+        if not k or not v:
+            warn(f"--set-secret {spec}: 既没给 value，环境变量里也没有 {spec}，跳过")
+            continue
+        if not set_secret(owner, name, token, k, v):
+            warn(f"未能写入 {k}（多半是缺 PyNaCl）。可改用网页："
+                 f"https://github.com/{slug}/settings/secrets/actions")
 
+    # 顺序很重要：Release 和附件必须先就位，标签最后推。
+    # release.yml 由标签触发，它要从 Release 拉 audiocpp-native-*.zip；先推标签
+    # 会让工作流跑到拉取步骤时附件还不存在，那次运行就只能发托管包。
+    # --draft-first 更进一步：草稿 Release 不会创建标签，所以标签根本不会提前出现。
     if args.release:
         tag = args.tag or ""
         if not tag:
-            die("--release 需要同时给 --tag")
+            die("--release 需要同时给 --tag（Release 需要一个标签名）")
         notes = ""
         if args.notes_file and pathlib.Path(args.notes_file).is_file():
             notes = pathlib.Path(args.notes_file).read_text(encoding="utf-8")
         else:
             notes = f"AudioCpp.NET {tag.lstrip('v')}"
-        rel = create_release(owner, name, tag, token, notes, args.prerelease)
+        rel = create_release(owner, name, tag, token, notes, args.prerelease,
+                             draft=args.draft_first)
         if args.assets:
             ad = pathlib.Path(args.assets)
             if not ad.is_dir():
@@ -452,15 +487,24 @@ def main() -> int:
             else:
                 n = upload_assets(owner, name, rel, ad, token)
                 info(f"附件处理完成，共 {n} 个")
+        if args.draft_first and rel.get("draft"):
+            publish_release(owner, name, rel["id"], tag, token)
 
-    for spec in args.set_secret:
-        if "=" not in spec:
-            warn(f"--set-secret 需要 NAME=value 格式，忽略: {spec}")
-            continue
-        k, v = spec.split("=", 1)
-        if not set_secret(owner, name, token, k, v):
-            warn(f"未能写入 {k}（多半是缺 PyNaCl）。可改用网页："
-                 f"https://github.com/{slug}/settings/secrets/actions")
+    if args.tag:
+        tags = run(["git", "tag", "--list", args.tag], cwd=repo_dir, check=False).stdout.strip()
+        if tags:
+            info(f"本地标签已存在: {args.tag}")
+        else:
+            info(f"创建本地标签 {args.tag}")
+            run(["git", "tag", "-a", args.tag, "-m", args.tag], cwd=repo_dir)
+        # 发布 Release 时 GitHub 已经建好了远端标签，此时再推会被拒（already exists）。
+        # 那是预期结果而不是错误，先查一下远端，避免无意义的失败。
+        remote = run(["git", "ls-remote", "--tags", "origin", args.tag],
+                     cwd=repo_dir, check=False, quiet=True).stdout.strip()
+        if remote:
+            info(f"远端标签已存在，跳过推送: {args.tag}")
+        else:
+            git_push(repo_dir, f"refs/tags/{args.tag}", token, slug)
 
     info("完成。")
     return 0
