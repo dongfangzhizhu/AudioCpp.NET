@@ -177,13 +177,14 @@ def main() -> int:
     # 防丢提交守卫。
     #
     # 不能用 compare API：它要求两个提交都存在于远端，而本地刚做的那次提交恰恰
-    # 还没推上去，于是只会拿到 404（status=None），判断不出任何东西。
+    # 还没推上去，于是只会拿到 404，判断不出任何东西。
     #
     # 分两步：
-    #   1. 如果远端提交的对象在本地存在（常规情况），直接用本地祖先判断；
-    #   2. 否则比较**树**——上一次用本工具推送会生成内容相同但 SHA 不同的提交，
-    #      于是两条链"分叉"。此时只要远端的树等于本地父提交的树，就说明远端已含
-    #      等价改动，把新提交挂上去不会丢东西。
+    #   1. 远端提交的对象在本地存在（常规 push 之后的情形），直接用本地祖先判断；
+    #   2. 否则比较**树**。本工具每次推送都会生成内容相同、SHA 不同的提交，两条链
+    #      因此"分叉"但内容可追溯。此时要在**整条本地历史**里找有没有哪个提交的树
+    #      等于远端树——只比父提交是不够的：连续用本工具推两次，远端会停在更早的
+    #      那个等价提交上。
     def git_ok(*a: str) -> bool:
         return subprocess.run(["git", "-C", str(repo), *a],
                               capture_output=True).returncode == 0
@@ -195,21 +196,16 @@ def main() -> int:
             info(f"远端 {remote_sha[:12]} 是本地 HEAD 的祖先，正常前进")
 
     if not ahead:
-        try:
-            parent = git(repo, "rev-parse", "HEAD^").strip()
-        except SystemExit:
-            parent = ""
-        if parent and git_ok("cat-file", "-e", parent):
-            # 父提交的树必须在**本地**算：它是本地专有的提交，远端没有这个对象，
-            # 向 /git/commits/{sha} 查只会得到 404。
-            local_parent_tree = git(repo, "rev-parse", f"{parent}^{{tree}}").strip()
-            if local_parent_tree == base["tree"]["sha"]:
+        # 树的哈希必须在本地算：本地专有的提交在远端没有对象，查 API 只会 404。
+        for sha in git(repo, "rev-list", "--max-count=500", "HEAD").split():
+            if git(repo, "rev-parse", f"{sha}^{{tree}}").strip() == base_tree:
                 ahead = True
-                info(f"远端 {remote_sha[:12]} 与本地父提交 {parent[:12]} 内容一致"
-                     "（SHA 不同，上一次 API 推送造成），按等价基线继续")
+                info(f"远端 {remote_sha[:12]} 的内容等于本地历史中的 {sha[:12]}"
+                     "（SHA 不同，早前的 API 推送造成），按等价基线继续")
+                break
 
     if not ahead:
-        die(f"远端 {remote_sha[:12]} 既不是本地 HEAD 的祖先，内容也不与本地父提交等价，"
+        die(f"远端 {remote_sha[:12]} 既不是本地 HEAD 的祖先，内容也不出现在本地历史中，"
             "继续推进会丢掉远端提交。请先用 git 处理分叉。")
 
     st, rtree = api("GET", f"/repos/{owner}/{name}/git/trees/{base_tree}?recursive=1", token)
