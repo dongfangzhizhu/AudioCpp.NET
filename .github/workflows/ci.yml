@@ -52,5 +52,12 @@ jobs:
 
       # A packaging regression in the managed package would otherwise only surface
       # at release time.
+      #
+      # Do not add --no-build here: packing folds the Interop assembly in via
+      # TargetsForTfmSpecificBuildOutput -> ResolveReferences, which builds the
+      # referenced project, and --no-build turns that into
+      #   error NETSDK1085: The 'NoBuild' property was set to true but the
+      #   'Build' target was invoked.   [AudioCpp.NET.Interop.csproj]
+      # release.yml packs without the flag for the same reason.
       - name: Pack managed package (validation only)
-        run: dotnet pack src/AudioCpp.NET/AudioCpp.NET.csproj -c Release --no-build -o build/nuget-check
+        run: dotnet pack src/AudioCpp.NET/AudioCpp.NET.csproj -c Release -o build/nuget-check
