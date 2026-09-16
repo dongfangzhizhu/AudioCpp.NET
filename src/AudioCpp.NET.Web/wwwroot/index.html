@@ -52,7 +52,20 @@
         <ul class="model-list" id="modelList"></ul>
       </article>
 
-      <article class="panel" style="--reveal:2">
+      <article class="panel" style="--reveal:3">
+        <h2><i class="tick"></i>ABI &amp; TASK CATALOG <span class="h2-cn">能力与任务目录</span></h2>
+        <div class="bay-tools">
+          <button class="btn" id="refreshCatalog">⟳ Rescan</button>
+          <span class="mono dim" id="catalogCount"></span>
+        </div>
+        <pre class="mono" id="buildFlags">loading…</pre>
+        <h3>CANONICAL TASKS <span class="h2-cn">规范任务令牌</span></h3>
+        <pre class="mono" id="taskCatalog"></pre>
+        <h3>LOADERS <span class="h2-cn">编译进 native 的加载器</span></h3>
+        <pre class="mono" id="loaderCatalog"></pre>
+      </article>
+
+      <article class="panel" style="--reveal:4">
         <h2><i class="tick"></i>UPLINK <span class="h2-cn">运行配置</span></h2>
         <form id="configForm" autocomplete="off">
           <label class="field">
@@ -76,7 +89,7 @@
     <!-- ══ right column · workbench ══ -->
     <section class="col">
 
-      <article class="panel deck" style="--reveal:3">
+      <article class="panel deck" style="--reveal:5">
         <div class="model-capabilities" id="modelCapabilities" aria-live="polite">选择本地模型以查看类型和支持语言。文件完整不代表当前 native 构建支持推理。</div>
         <div class="tabstrip" role="tablist">
           <input type="radio" name="deck" id="tabAsr" checked>
@@ -85,6 +98,8 @@
           <label for="tabTts" role="tab"><i class="tab-led"></i>TTS <span>语音合成</span></label>
           <input type="radio" name="deck" id="tabStream">
           <label for="tabStream" role="tab"><i class="tab-led"></i>VAD STREAM <span>流式检测</span></label>
+          <input type="radio" name="deck" id="tabAny">
+          <label for="tabAny" role="tab"><i class="tab-led"></i>ANY TASK <span>通用任务</span></label>
         </div>
 
         <!-- ASR unit -->
@@ -108,6 +123,16 @@
               <input class="mono" id="asrThreads" type="number" min="0" placeholder="auto">
             </label>
           </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Task <em>音频输入任务（含别名）</em></span>
+              <select class="mono" id="asrTask" data-task-tokens="audio"></select>
+            </label>
+            <label class="field w-sm">
+              <span>Text language</span>
+              <input class="mono" id="asrTextLanguage" type="text" spellcheck="false" placeholder="zh">
+            </label>
+          </div>
           <label class="field">
             <span>Family hint</span>
             <input class="mono" id="asrFamily" type="text" spellcheck="false" placeholder="自动推断，可覆盖">
@@ -127,6 +152,10 @@
               <pre class="mono" id="asrSegments"></pre>
               <h3>WORD TIMESTAMPS <span class="h2-cn">词级时间戳</span></h3>
               <pre class="mono" id="asrWords"></pre>
+              <h3>SPEAKER TURNS <span class="h2-cn">说话人分段</span></h3>
+              <pre class="mono" id="asrTurns"></pre>
+              <h3>ARTIFACTS <span class="h2-cn">结构产物</span></h3>
+              <pre class="mono" id="asrArtifacts"></pre>
             </div>
           </div>
         </section>
@@ -152,11 +181,22 @@
           <div class="field-row">
             <label class="field grow">
               <span>Task <em>流式任务</em></span>
-              <input class="mono" id="streamTask" type="text" spellcheck="false" placeholder="vad">
+              <input class="mono" id="streamTask" type="text" spellcheck="false" placeholder="vad" list="streamTaskOptions">
             </label>
             <label class="field w-sm">
               <span>Chunk ms</span>
               <input class="mono" id="streamChunkMs" type="number" min="1" placeholder="100">
+            </label>
+          </div>
+          <datalist id="streamTaskOptions"></datalist>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Text prompt <em>可选，流式 ASR 上下文</em></span>
+              <input class="mono" id="streamText" type="text" spellcheck="false">
+            </label>
+            <label class="field w-sm">
+              <span>Text language</span>
+              <input class="mono" id="streamTextLanguage" type="text" spellcheck="false" placeholder="zh">
             </label>
           </div>
           <label class="field">
@@ -181,16 +221,131 @@
           </div>
         </section>
 
-        <section class="unit" id="deckMusic" hidden>
-          <h2>SONG STUDIO · 歌词生成歌曲</h2>
-          <label class="field"><span>歌词</span><textarea id="musicLyrics" rows="8" placeholder="输入分段歌词"></textarea></label>
-          <label class="field"><span>音乐风格 / 提示词</span><textarea id="musicStyle" rows="3" placeholder="曲风、乐器、情绪"></textarea></label>
-          <p>音乐任务尚未接入 Web 推理接口；此面板用于独立编辑，不会调用 TTS。</p>
-          <button class="btn" disabled>音乐生成暂不可运行</button>
-        </section>
-        <section class="unit" id="deckOther" hidden>
-          <h2>其他音频任务</h2>
-          <p>此任务尚无对应 Web 推理接口。不会将其模型发送到 ASR/TTS。</p>
+        <!-- generic task console: every task the shim can dispatch -->
+        <section class="unit" id="deckAny" hidden>
+          <p class="hint">任何任务都可在此运行：选择任务令牌（规范令牌或 model_spec 别名均可），
+            按需提供文本、音频、音色参考、风格条件与输入结构产物。音频输入为可选，
+            因此 <code>asr/diar/sep/vad/spk/midi</code> 与 <code>tts/clon/gen/vdes</code>
+            共用同一套表单。<span class="mono dim">留空 task 时由 native 依据输入形态推断。</span></p>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Task <em>任务令牌</em></span>
+              <select class="mono" id="anyTask"></select>
+            </label>
+            <label class="field grow">
+              <span>Model path <em>模型目录 / manifest</em></span>
+              <input class="mono" id="anyModelPath" type="text" spellcheck="false" placeholder="Qwen3-TTS-12Hz-0.6B-Base-GGUF">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Family hint</span>
+              <input class="mono" id="anyFamily" type="text" spellcheck="false" placeholder="自动推断，可覆盖">
+            </label>
+            <label class="field w-sm">
+              <span>Threads</span>
+              <input class="mono" id="anyThreads" type="number" min="0" placeholder="auto">
+            </label>
+            <label class="field w-sm">
+              <span>Chunk ms <em>流式</em></span>
+              <input class="mono" id="anyChunkMs" type="number" min="1" placeholder="100">
+            </label>
+          </div>
+          <label class="field">
+            <span>Text <em>文本输入（TTS / 克隆 / 设计 / 对齐 / 转换）</em></span>
+            <textarea id="anyText" rows="3" spellcheck="false" placeholder="Hello from audio.cpp"></textarea>
+          </label>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Text language <em>结果中的 text_language</em></span>
+              <input class="mono" id="anyTextLanguage" type="text" spellcheck="false" placeholder="zh">
+            </label>
+            <label class="field grow">
+              <span>Voice id <em>缓存的音色 ID</em></span>
+              <input class="mono" id="anyVoiceId" type="text" spellcheck="false">
+            </label>
+          </div>
+          <div class="field-row">
+            <div class="dropzone slim grow" id="anyDrop">
+              <input type="file" id="anyFile" accept=".wav,audio/wav" hidden>
+              <p><strong>Audio input</strong> / 可选，音频输入（ASR·VAD·分离·转换·对齐…）</p>
+              <p class="dz-file mono" id="anyFileName" hidden></p>
+              <button class="btn btn-mini" id="anyClear" type="button" hidden>✕ clear</button>
+            </div>
+            <div class="dropzone slim grow" id="anyRefDrop">
+              <input type="file" id="anyRefFile" accept=".wav,audio/wav" hidden>
+              <p><strong>Voice reference</strong> / 可选，音色参考</p>
+              <p class="dz-file mono" id="anyRefName" hidden></p>
+              <button class="btn btn-mini" id="anyRefClear" type="button" hidden>✕ clear</button>
+            </div>
+          </div>
+          <label class="field">
+            <span>Reference text <em>参考音频的文字内容</em></span>
+            <input id="anyRefText" type="text" spellcheck="false">
+          </label>
+          <h3>STYLE CONDITION <span class="h2-cn">风格条件</span></h3>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Style language</span>
+              <input class="mono" id="anyStyleLanguage" type="text" spellcheck="false" placeholder="zh">
+            </label>
+            <label class="field grow">
+              <span>Emotion</span>
+              <input class="mono" id="anyEmotion" type="text" spellcheck="false" placeholder="calm">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Speaking rate</span>
+              <input class="mono" id="anySpeakingRate" type="number" step="0.05" placeholder="1.0">
+            </label>
+            <label class="field grow">
+              <span>Pitch shift</span>
+              <input class="mono" id="anyPitchShift" type="number" step="0.5" placeholder="0">
+            </label>
+            <label class="field grow">
+              <span>Energy scale</span>
+              <input class="mono" id="anyEnergyScale" type="number" step="0.05" placeholder="1.0">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Style tags <em>JSON 对象</em></span>
+              <input class="mono" id="anyStyleTags" type="text" spellcheck="false" placeholder='{"whisper":"1"}'>
+            </label>
+            <label class="field grow">
+              <span>Options JSON <em>原生选项</em></span>
+              <input class="mono" id="anyOptions" type="text" spellcheck="false" placeholder='{"key":"value"}'>
+            </label>
+          </div>
+          <label class="field">
+            <span>Artifacts JSON <em>输入结构产物数组</em></span>
+            <input class="mono" id="anyArtifacts" type="text" spellcheck="false"
+                   placeholder='[{"kind":"speaker_embedding","id":"spk","payload_hex":"00ff","meta":{"dim":"32"}}]'>
+          </label>
+          <div class="run-row">
+            <button class="btn btn-run" id="anyRun">▶ RUN TASK<span class="vu"><i></i><i></i><i></i><i></i><i></i></span></button>
+            <button class="btn btn-mini" id="anyRunStream" type="button">▶ RUN AS STREAM</button>
+            <button class="btn btn-mini" id="anyClearForm" type="button">⟲ RESET FORM</button>
+          </div>
+          <div class="readout" id="anyOutWrap" hidden>
+            <h3>STRUCTURED RESULT <span class="h2-cn">结构化结果</span></h3>
+            <pre class="mono" id="anySummary"></pre>
+            <h3>TEXT <span class="h2-cn">文本输出</span></h3>
+            <pre class="mono" id="anyTextOut"></pre>
+            <h3>AUDIO <span class="h2-cn">音频输出</span></h3>
+            <div id="anyAudio" class="audio-stack"></div>
+            <h3>SEGMENTS <span class="h2-cn">语音分段</span></h3>
+            <pre class="mono" id="anySegments"></pre>
+            <h3>WORD TIMESTAMPS <span class="h2-cn">词级时间戳</span></h3>
+            <pre class="mono" id="anyWords"></pre>
+            <h3>SPEAKER TURNS <span class="h2-cn">说话人分段</span></h3>
+            <pre class="mono" id="anyTurns"></pre>
+            <h3>ARTIFACTS <span class="h2-cn">结构产物</span></h3>
+            <pre class="mono" id="anyArtifactList"></pre>
+            <h3>RAW JSON <span class="h2-cn">原生结构化结果</span></h3>
+            <pre class="mono raw" id="anyRaw"></pre>
+          </div>
         </section>
         <!-- TTS unit -->
         <section class="unit" id="deckTts" hidden>
@@ -222,6 +377,55 @@
             <span>Family hint</span>
             <input class="mono" id="ttsFamily" type="text" spellcheck="false" placeholder="自动推断，可覆盖">
           </label>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Task <em>文本输入任务（含别名）</em></span>
+              <select class="mono" id="ttsTask"></select>
+            </label>
+            <label class="field w-sm">
+              <span>Text language</span>
+              <input class="mono" id="ttsTextLanguage" type="text" spellcheck="false" placeholder="zh">
+            </label>
+          </div>
+          <h3>STYLE CONDITION <span class="h2-cn">风格条件（仅声明支持风格条件的加载器）</span></h3>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Style language</span>
+              <input class="mono" id="ttsStyleLanguage" type="text" spellcheck="false" placeholder="zh">
+            </label>
+            <label class="field grow">
+              <span>Emotion</span>
+              <input class="mono" id="ttsEmotion" type="text" spellcheck="false" placeholder="calm">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Speaking rate</span>
+              <input class="mono" id="ttsSpeakingRate" type="number" step="0.05" placeholder="1.0">
+            </label>
+            <label class="field grow">
+              <span>Pitch shift</span>
+              <input class="mono" id="ttsPitchShift" type="number" step="0.5" placeholder="0">
+            </label>
+            <label class="field grow">
+              <span>Energy scale</span>
+              <input class="mono" id="ttsEnergyScale" type="number" step="0.05" placeholder="1.0">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field grow">
+              <span>Style tags <em>JSON 对象</em></span>
+              <input class="mono" id="ttsStyleTags" type="text" spellcheck="false" placeholder='{"whisper":"1"}'>
+            </label>
+            <label class="field grow">
+              <span>Voice id <em>缓存的音色 ID</em></span>
+              <input class="mono" id="ttsVoiceId" type="text" spellcheck="false">
+            </label>
+          </div>
+          <label class="field">
+            <span>Artifacts JSON <em>可选，输入结构产物</em></span>
+            <input class="mono" id="ttsArtifacts" type="text" spellcheck="false" placeholder='[{"kind":"speaker_embedding","payload_hex":"00ff"}]'>
+          </label>
           <label class="field">
             <span>Options JSON <em>可选，原生选项</em></span>
             <input class="mono" id="ttsOptions" type="text" spellcheck="false" placeholder='{"key":"value"}'>
@@ -229,10 +433,16 @@
           <div class="run-row">
             <button class="btn btn-run" id="ttsRun">▶ RUN TTS<span class="vu"><i></i><i></i><i></i><i></i><i></i></span></button>
           </div>
+          <div class="readout" id="ttsOutWrap" hidden>
+            <h3>NAMED AUDIO <span class="h2-cn">命名音轨</span></h3>
+            <pre class="mono" id="ttsNamedAudio"></pre>
+            <h3>ARTIFACTS <span class="h2-cn">结构产物</span></h3>
+            <pre class="mono" id="ttsArtifactList"></pre>
+          </div>
         </section>
       </article>
 
-      <article class="panel result" id="resultPanel" style="--reveal:4" hidden>
+      <article class="panel result" id="resultPanel" style="--reveal:6" hidden>
         <h2><i class="tick"></i>MONITOR <span class="h2-cn">合成结果</span></h2>
         <audio id="resAudio" controls preload="metadata"></audio>
         <div class="result-meta mono">
@@ -245,7 +455,7 @@
 
   </main>
 
-  <footer class="panel log-plate" style="--reveal:5">
+  <footer class="panel log-plate" style="--reveal:7">
     <h3>STUDIO LOG <span class="h2-cn">运行日志</span></h3>
     <div class="log mono" id="log" aria-live="polite"></div>
   </footer>

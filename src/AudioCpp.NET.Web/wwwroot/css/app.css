@@ -325,6 +325,33 @@ textarea { resize: vertical; min-height: 64px; font-family: var(--body); }
 .tabstrip, .brand-plate, h2, .bay-tools { flex-wrap: wrap; }
 .plate-status, .log, .pkg .id { overflow-wrap: anywhere; }
 .field input, .field textarea { max-width: 100%; }
+
+/* ── task catalog plate ── */
+.panel > pre {
+  margin: 0 0 10px; padding: 11px 13px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--teal);
+  background: var(--well); border: 1px solid var(--line-soft); border-radius: 7px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, .45);
+}
+.panel > pre:empty::after { content: "— empty —"; color: #57503f; }
+
+/* ── generic task console ── */
+.unit .hint { margin: 0 0 14px; font-size: 12.5px; line-height: 1.7; color: var(--dim); }
+.unit .hint code { font-family: var(--mono); font-size: 11.5px; color: var(--teal); }
+.run-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+select.mono { font-family: var(--mono); font-size: 12.5px; }
+.readout pre.raw { max-height: 340px; overflow: auto; color: #b3a88f; }
+.audio-stack { display: grid; gap: 10px; margin: 0 0 14px; }
+.audio-stack .track {
+  display: grid; gap: 8px; align-items: center;
+  border: 1px solid var(--line-soft); border-radius: 7px; padding: 10px 12px;
+  background: rgba(0, 0, 0, .18);
+}
+.audio-stack .track-label { font-size: 11px; color: var(--dim); }
+.audio-stack audio { width: 100%; accent-color: var(--amber); }
+.audio-stack a { text-decoration: none; justify-self: start; }
+
 @media (max-width: 560px) {
   .field-row { flex-wrap: wrap; }
   .field-row > * { width: 100%; flex-basis: 100%; }

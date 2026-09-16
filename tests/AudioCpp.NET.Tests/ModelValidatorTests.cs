@@ -121,8 +121,19 @@ public sealed class ModelValidatorTests
         var families = new[] { "tts", "qwen3_tts", "citrinet_asr" };
         Assert.Equal("qwen3_tts", ModelValidator.DeriveFamily("qwen3_tts_0_6b_base_q8_0", families));
         Assert.Equal("citrinet_asr", ModelValidator.DeriveFamily("citrinet_asr_q8_0", families));
-        Assert.Equal("audio8_asr", ModelValidator.DeriveFamily("audio8_asr_0_1b_safetensors"));
+        // The loader catalog is the only source of families now, so an id whose
+        // family is not installed resolves to null instead of a compiled-in guess.
+        Assert.Null(ModelValidator.DeriveFamily("audio8_asr_0_1b_safetensors", families));
         Assert.Null(ModelValidator.DeriveFamily("unknown_pkg_x", families));
+    }
+
+    [Fact]
+    public void DeriveFamilyMatchesEverySuppliedFamily()
+    {
+        var families = new[] { "audio8_asr", "tts" };
+        Assert.Equal("audio8_asr", ModelValidator.DeriveFamily("audio8_asr_0_1b_safetensors", families));
+        Assert.Equal("tts", ModelValidator.DeriveFamily("tts", families));
+        Assert.Throws<ArgumentNullException>(() => ModelValidator.DeriveFamily("tts", null!));
     }
 
     private static void WriteFile(string path, int size)

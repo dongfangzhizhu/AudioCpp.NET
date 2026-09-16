@@ -1,6 +1,10 @@
 using System.Text.Json;
+using AudioCpp.NET;
 
-internal sealed record ModelMetadata(string? Family, string Task, string[] Languages, string[] Tasks)
+/// <summary>Reads the upstream model_specs/*.json shipped next to the executable.
+/// Specs use their own task vocabulary (music / clone / design / …), so both the
+/// raw tokens and their canonical equivalents are reported.</summary>
+internal sealed record ModelMetadata(string? Family, string Task, string[] Languages, string[] Tasks, string[] CanonicalTasks)
 {
     internal static ModelMetadata Resolve(string? packageId)
     {
@@ -14,12 +18,15 @@ internal sealed record ModelMetadata(string? Family, string Task, string[] Langu
                 if (!spec.TryGetProperty("packages", out var packages) ||
                     !packages.EnumerateArray().Any(p => p.GetProperty("id").GetString() == packageId)) continue;
                 var tasks = Strings(spec, "tasks");
-                var task = tasks.Contains("music") ? "music" : tasks.Contains("asr") ? "asr" :
-                    tasks.Contains("tts") ? "tts" : tasks.FirstOrDefault() ?? "unknown";
-                return new(spec.GetProperty("family").GetString(), task, Strings(spec, "languages"), tasks);
+                var canonical = tasks.Select(AudioCppTaskKinds.Normalize).Where(task => task is not null).Select(task => task!).Distinct().ToArray();
+                var task = canonical.Contains(AudioCppTaskKinds.AudioGeneration) ? AudioCppTaskKinds.AudioGeneration
+                    : canonical.Contains(AudioCppTaskKinds.Asr) ? AudioCppTaskKinds.Asr
+                    : canonical.Contains(AudioCppTaskKinds.Tts) ? AudioCppTaskKinds.Tts
+                    : canonical.FirstOrDefault() ?? "unknown";
+                return new(spec.GetProperty("family").GetString(), task, Strings(spec, "languages"), tasks, canonical);
             }
         }
-        return new(null, "unknown", [], []);
+        return new(null, "unknown", [], [], []);
     }
 
     private static string[] Strings(JsonElement root, string name) =>

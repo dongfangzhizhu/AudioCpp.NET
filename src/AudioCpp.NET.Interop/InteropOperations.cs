@@ -3,6 +3,15 @@ using System.Text;
 
 namespace AudioCpp.NET.Interop;
 
+/// <summary>Flattened arguments for <c>audiocpp_model_run_json_ex</c>. Lives in the
+/// interop assembly because that is where the marshalling happens; AudioCpp.NET
+/// builds it and is granted access through InternalsVisibleTo.</summary>
+internal readonly record struct AudioCppRunInput(
+    string? Task, string? Text, string? TextLanguage,
+    ReadOnlyMemory<float> Audio, int SampleRate, int Channels,
+    string? VoiceId, ReadOnlyMemory<float> Reference, int ReferenceSampleRate,
+    string? ArtifactsJson, string? OptionsJson);
+
 internal static class InteropOperations
 {
     internal const int ErrorBufferLength = 4096;
@@ -22,6 +31,18 @@ internal static class InteropOperations
     {
         using var error = new NativeErrorBuffer();
         var status = NativeMethods.GetLoaderCatalog(out var json, error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return Marshal.PtrToStringUTF8(json) ?? "";
+        }
+        finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+    }
+
+    internal static string GetTaskCatalog()
+    {
+        using var error = new NativeErrorBuffer();
+        var status = NativeMethods.GetTaskCatalog(out var json, error.Pointer, (nuint)error.Length);
         try
         {
             if (status != 0) throw new NativeCallException(status, error.Text);
@@ -130,11 +151,39 @@ internal static class InteropOperations
         }
     }
 
+    internal static unsafe string RunJson(SafeModelHandle model, AudioCppRunInput input)
+    {
+        fixed (float* audioPtr = input.Audio.Span) fixed (float* referencePtr = input.Reference.Span)
+        using (var error = new NativeErrorBuffer())
+        {
+            var status = NativeMethods.ModelRunJsonEx(model, input.Task, input.Text, input.TextLanguage,
+                audioPtr, input.Audio.Length, input.SampleRate, input.Channels, input.VoiceId,
+                referencePtr, input.Reference.Length, input.ReferenceSampleRate, input.ArtifactsJson, input.OptionsJson,
+                out var json, error.Pointer, (nuint)error.Length);
+            try { if (status != 0) throw new NativeCallException(status, error.Text); return Marshal.PtrToStringUTF8(json) ?? "{}"; }
+            finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+        }
+    }
+
     internal static (SafeStreamHandle Handle, string Info) OpenStream(SafeModelHandle model, string task, string? options)
     {
         using var error = new NativeErrorBuffer();
         var status = NativeMethods.StreamOpen(model, task, options, out var native, out var info,
             error.Pointer, (nuint)error.Length);
+        try
+        {
+            if (status != 0) throw new NativeCallException(status, error.Text);
+            return (new SafeStreamHandle(native), Marshal.PtrToStringUTF8(info) ?? "{}");
+        }
+        finally { if (info != IntPtr.Zero) NativeMethods.BufferFree(info); }
+    }
+
+    internal static (SafeStreamHandle Handle, string Info) OpenStream(
+        SafeModelHandle model, string task, string? text, string? textLanguage, string? artifactsJson, string? options)
+    {
+        using var error = new NativeErrorBuffer();
+        var status = NativeMethods.StreamOpenEx(model, task, text, textLanguage, artifactsJson, options,
+            out var native, out var info, error.Pointer, (nuint)error.Length);
         try
         {
             if (status != 0) throw new NativeCallException(status, error.Text);

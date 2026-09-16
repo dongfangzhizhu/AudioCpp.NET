@@ -21,7 +21,6 @@ public static class ModelValidator
 {
     private static readonly string ManifestPrefix = ".audiocpp-package-";
     private static readonly string ManifestSuffix = ".json";
-    private static readonly string[] KnownFamilies = new[] { "citrinet_asr", "qwen3_tts", "audio8_asr" };
 
     /// <summary>Validates one model directory. Directories without a manifest are
     /// considered complete unless they are empty; installed packages are checked
@@ -101,10 +100,14 @@ public static class ModelValidator
     }
 
     /// <summary>Infers the model family from a package ID by longest-prefix matching
-    /// against the given family list.</summary>
+    /// against the given family list. Callers pass the families reported by the
+    /// native loader catalog (<see cref="AudioCppRuntime.LoaderFamilies"/>); there is
+    /// deliberately no built-in family list, because a hard-coded one silently rots
+    /// as soon as the shim is built with a different model set.</summary>
     public static string? DeriveFamily(string packageId, IEnumerable<string> families)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        ArgumentNullException.ThrowIfNull(families);
         string? best = null;
         foreach (var family in families)
         {
@@ -114,9 +117,6 @@ public static class ModelValidator
         }
         return best;
     }
-
-    /// <summary>A convenience wrapper that uses the families known to this distribution.</summary>
-    public static string? DeriveFamily(string packageId) => DeriveFamily(packageId, KnownFamilies);
 
     private static ModelValidationScan ScanManifest(string manifestPath)
     {

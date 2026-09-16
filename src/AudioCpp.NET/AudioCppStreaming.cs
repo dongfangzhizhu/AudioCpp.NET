@@ -8,6 +8,14 @@ public sealed record AudioCppStreamingOptions
     public int Channels { get; init; } = 1;
     public int ChunkMilliseconds { get; init; } = AudioCppStreaming.DefaultChunkMilliseconds;
     public IReadOnlyDictionary<string, string>? Options { get; init; }
+    /// <summary>Optional text prompt handed to the session at open time
+    /// (streaming ASR context, for example).</summary>
+    public string? Text { get; init; }
+    public string? TextLanguage { get; init; }
+    public AudioCppStyle? Style { get; init; }
+    /// <summary>Input artifacts (speaker embedding, acoustic tokens, …) forwarded
+    /// through <c>audiocpp_stream_open_ex</c>.</summary>
+    public IReadOnlyList<AudioCppInputArtifact>? Artifacts { get; init; }
 }
 
 /// <summary>One chunk of PCM scheduled for a streaming session.</summary>
@@ -114,7 +122,7 @@ public static class AudioCppStreaming
     {
         ArgumentNullException.ThrowIfNull(model);
         ValidateBuffer(samples, options);
-        using var session = model.StartStreaming(options.Task, options.Options);
+        using var session = model.StartStreaming(options);
         var info = session.Info;
         var chunkSamples = ResolveChunkSamples(info.Policy, options.SampleRate, options.ChunkMilliseconds);
         var chunks = PlanChunks(samples, info.Policy, options.SampleRate, options.ChunkMilliseconds);

@@ -26,9 +26,11 @@ internal static class InteractiveMenu
                 case "5": await Verify(settings); break;
                 case "6": Configure(settings); break;
                 case "7": await Execute(["models", "list", .. Common(settings)]); break;
+                case "8": await Execute(["tasks", .. Common(settings)]); break;
+                case "9": await AnyTask(settings); break;
                 case "h" or "help" or "?": await ConsoleApp.RunAsync(["help"]); break;
                 case "0" or "q" or "quit" or "exit": return 0;
-                default: WriteError("Please choose 0-7."); break;
+                default: WriteError("Please choose 0-9."); break;
             }
             Console.WriteLine("\nPress Enter to return to the menu...");
             Console.ReadLine();
@@ -37,12 +39,13 @@ internal static class InteractiveMenu
 
     private static void PrintMenu(Settings settings)
     {
-        Console.WriteLine("\n┌────────────────────────────────────────────────────────────┐");
-        Console.WriteLine("│  1  Model packages/status     5  End-to-end verification   │");
-        Console.WriteLine("│  2  Download a model          6  Settings                  │");
-        Console.WriteLine("│  3  Speech recognition        7  Compiled model loaders    │");
-        Console.WriteLine("│  4  Text to speech            0  Exit                      │");
-        Console.WriteLine("└────────────────────────────────────────────────────────────┘");
+        Console.WriteLine("\n┌────────────────────────────────────────────────────────────────┐");
+        Console.WriteLine("│  1  Model packages/status     6  Settings                      │");
+        Console.WriteLine("│  2  Download a model          7  Compiled model loaders        │");
+        Console.WriteLine("│  3  Speech recognition        8  Task catalog & capabilities   │");
+        Console.WriteLine("│  4  Text to speech            9  Run any task (structured)     │");
+        Console.WriteLine("│  5  End-to-end verification   0  Exit                          │");
+        Console.WriteLine("└────────────────────────────────────────────────────────────────┘");
         Console.WriteLine($"Models: {settings.ModelsDirectory}");
         Console.WriteLine($"Mirror: {settings.HuggingFaceEndpoint}");
     }
@@ -70,6 +73,25 @@ internal static class InteractiveMenu
         var referenceText = PromptRequired("Transcript of the voice reference");
         await Execute(["tts", "--text", text, "--output", output, "--model", model,
             "--voice-ref", voiceRef, "--reference-text", referenceText, .. Common(settings)]);
+    }
+
+    /// <summary>
+    /// Prompts for the inputs of any task; blank answers simply omit the flag, so
+    /// the shim falls back to inferring the task from what was supplied.
+    /// </summary>
+    private static async Task AnyTask(Settings settings)
+    {
+        var model = Prompt("Model path", Path.Combine(settings.ModelsDirectory, "Qwen3-TTS-12Hz-0.6B-Base-GGUF"));
+        var task = Prompt("Task token (blank lets the shim infer it)", "tts");
+        var text = Prompt("Text input (blank for none)", "");
+        var input = Prompt("Audio input PCM16 WAV path (blank for none)", "");
+        var output = Prompt("Output WAV path (blank skips writing audio)", "");
+        var extra = new List<string> { "run", "--model", model };
+        if (task.Length > 0) { extra.Add("--task"); extra.Add(task); }
+        if (text.Length > 0) { extra.Add("--text"); extra.Add(text); }
+        if (input.Length > 0) { extra.Add("--input"); extra.Add(input); }
+        if (output.Length > 0) { extra.Add("--output"); extra.Add(output); }
+        await Execute([.. extra, .. Common(settings)]);
     }
 
     private static async Task Verify(Settings settings)

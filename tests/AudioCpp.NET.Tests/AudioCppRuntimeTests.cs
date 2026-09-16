@@ -68,6 +68,19 @@ public sealed class AudioCppRuntimeTests
     }
 
     [Fact]
+    public void StructuredResultReportsTheTaskThatRan()
+    {
+        using var document = System.Text.Json.JsonDocument.Parse("{\"schema_version\":2,\"task\":\"asr\",\"text_output\":\"hi\"}");
+        var result = new AudioCppTaskResult(document.RootElement.Clone());
+        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal("asr", result.Task);
+        // A shim predating schema 2 emits no "task"; callers fall back to the
+        // token they requested, so the property stays null rather than throwing.
+        using var legacy = System.Text.Json.JsonDocument.Parse("{\"schema_version\":1}");
+        Assert.Null(new AudioCppTaskResult(legacy.RootElement.Clone()).Task);
+    }
+
+    [Fact]
     public void StructuredResultToleratesMissingFields()
     {
         using var document = System.Text.Json.JsonDocument.Parse("{}");
@@ -102,12 +115,15 @@ public sealed class AudioCppRuntimeTests
         var options = InvokeBuildRequestOptions(new TtsRequest
         {
             Text = "hi",
-            Language = "zh",
-            Emotion = "calm",
-            SpeakingRate = 1.25f,
-            PitchShift = -2f,
-            EnergyScale = 0.8f,
-            StyleTags = new Dictionary<string, string> { ["whisper"] = "1", ["formal"] = "true" },
+            Style = new AudioCppStyle
+            {
+                Language = "zh",
+                Emotion = "calm",
+                SpeakingRate = 1.25f,
+                PitchShift = -2f,
+                EnergyScale = 0.8f,
+                Tags = new Dictionary<string, string> { ["whisper"] = "1", ["formal"] = "true" },
+            },
             Options = new Dictionary<string, string> { ["temperature"] = "0.5" }
         });
         Assert.Equal("0.5", options["temperature"]);

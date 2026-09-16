@@ -2,32 +2,35 @@
 
 #include "engine/framework/core/backend.h"
 #include "engine/framework/core/module.h"
+#include "engine/framework/io/json.h"
 #include "engine/framework/runtime/registry.h"
 #include "engine/framework/runtime/session.h"
 #if defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
 #include "engine/framework/package_manager/manager.h"
 #endif
 
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <atomic>
 #include <functional>
 #include <sstream>
+#include <vector>
 
 namespace {
 constexpr const char * kCommit = "78d47706c30ef215ba9ad3559baff309efeb5260";
-constexpr uint64_t kTts = 1ull << 0;
-constexpr uint64_t kAsr = 1ull << 1;
-#ifndef AUDIOCPP_DOTNET_BACKEND
-#define AUDIOCPP_DOTNET_BACKEND "unknown"
-#endif
+#ifdef AUDIOCPP_DOTNET_BACKEND
 constexpr const char * kBackend = AUDIOCPP_DOTNET_BACKEND;
+#else
+constexpr const char * kBackend = "unknown";
+#endif
 
 void set_error(char * buffer, size_t length, const char * message) noexcept {
     if (buffer != nullptr && length != 0) {
@@ -63,6 +66,113 @@ char * copy_string(const std::string & value) {
     return result;
 }
 
+// ---- task tokens -----------------------------------------------------------------
+//
+// audiocpp_model_run_json/stream_open accept the canonical tokens used by
+// runtime::to_string(VoiceTaskKind) *and* the tokens that appear in
+// upstream's model_specs/*.json "tasks" arrays. Upstream keeps that second table
+// private to src/framework/model_spec/metadata.cpp, so the mapping is mirrored
+// here; audiocpp_get_task_catalog publishes it back to callers.
+struct TaskAlias {
+    const char * token;
+    engine::runtime::VoiceTaskKind kind;
+};
+
+constexpr TaskAlias kTaskAliases[] = {
+    {"audio_generation", engine::runtime::VoiceTaskKind::AudioGeneration},
+    {"music", engine::runtime::VoiceTaskKind::AudioGeneration},
+    {"sfx", engine::runtime::VoiceTaskKind::AudioGeneration},
+    {"edit", engine::runtime::VoiceTaskKind::AudioGeneration},
+    {"clone", engine::runtime::VoiceTaskKind::VoiceCloning},
+    {"design", engine::runtime::VoiceTaskKind::VoiceDesign},
+    {"speaker", engine::runtime::VoiceTaskKind::SpeakerRecognition},
+    {"codec", engine::runtime::VoiceTaskKind::VoiceConversion},
+};
+
+struct TaskDescriptor {
+    engine::runtime::VoiceTaskKind kind;
+    const char * token;
+    const char * input;            // audio | text | audio+text
+    const char * typical_outputs;  // comma-separated TaskResult channels
+};
+
+constexpr TaskDescriptor kTaskCatalog[] = {
+    {engine::runtime::VoiceTaskKind::Vad, "vad", "audio", "speech_segments"},
+    {engine::runtime::VoiceTaskKind::Asr, "asr", "audio", "text_output,word_timestamps,speech_segments"},
+    {engine::runtime::VoiceTaskKind::Diarization, "diar", "audio", "speaker_turns"},
+    {engine::runtime::VoiceTaskKind::SourceSeparation, "sep", "audio", "named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::AudioGeneration, "gen", "text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::Tts, "tts", "text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::VoiceCloning, "clon", "text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::VoiceConversion, "vc", "audio+text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::SpeechToSpeech, "s2s", "audio+text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::Alignment, "align", "audio+text", "word_timestamps"},
+    {engine::runtime::VoiceTaskKind::VoiceDesign, "vdes", "text", "audio_output"},
+    {engine::runtime::VoiceTaskKind::SpeakerRecognition, "spk", "audio", "artifact_output"},
+    {engine::runtime::VoiceTaskKind::Svc, "svc", "audio+text", "audio_output"},
+    {engine::runtime::VoiceTaskKind::Midi, "midi", "audio", "artifact_output"},
+};
+
+std::string lowercase(std::string value) {
+    for (char & ch : value) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return value;
+}
+
+// Throws std::invalid_argument with the full accepted-token list so callers get
+// an actionable message instead of a bare "unsupported task".
+engine::runtime::VoiceTaskKind parse_task_kind(const char * value) {
+    std::string token = lowercase(value == nullptr ? std::string() : std::string(value));
+    if (token.empty()) throw std::invalid_argument("task must not be empty");
+    for (const auto & entry : kTaskCatalog) {
+        if (token == entry.token) return entry.kind;
+    }
+    for (const auto & entry : kTaskAliases) {
+        if (token != entry.token) continue;
+        // "codec" is advertised by miocodec's spec but upstream has no codec
+        // kind; the model's own vc/s2s sessions are the supported path.
+        return entry.kind;
+    }
+    std::string accepted;
+    for (const auto & entry : kTaskCatalog) { if (!accepted.empty()) accepted += ", "; accepted += entry.token; }
+    for (const auto & entry : kTaskAliases) { accepted += ", "; accepted += entry.token; }
+    throw std::invalid_argument("unsupported task: " + token + " (expected one of " + accepted + ")");
+}
+
+std::string task_catalog_json() {
+    std::ostringstream output;
+    output << "{\"schema_version\":" << AUDIOCPP_TASK_CATALOG_SCHEMA_VERSION << ",\"tasks\":[";
+    for (size_t i = 0; i < sizeof(kTaskCatalog) / sizeof(kTaskCatalog[0]); ++i) {
+        if (i != 0) output << ',';
+        const auto & entry = kTaskCatalog[i];
+        output << "{\"task\":\"" << json_escape(entry.token) << "\",\"input\":\"" << entry.input
+               << "\",\"typical_outputs\":[\"";
+        const std::string channels(entry.typical_outputs);
+        size_t start = 0;
+        bool first_channel = true;
+        while (start <= channels.size()) {
+            const size_t comma = channels.find(',', start);
+            const std::string channel = channels.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+            if (!first_channel) output << "\",\"";
+            first_channel = false;
+            output << channel;
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+        output << "\"],\"aliases\":[";
+        bool first_alias = true;
+        for (const auto & alias : kTaskAliases) {
+            if (alias.kind != entry.kind) continue;
+            if (!first_alias) output << ',';
+            first_alias = false;
+            output << "\"" << alias.token << "\"";
+        }
+        output << "]}";
+    }
+    output << "]}";
+    return output.str();
+}
+
+// ---- loader catalog --------------------------------------------------------------
 std::string loader_catalog_json() {
     const auto rows = engine::runtime::make_default_registry().advertise_loaders();
     std::ostringstream output;
@@ -112,8 +222,8 @@ engine::core::BackendType parse_backend(const char * value) {
 }
 
 void parse_options(const char * json, std::unordered_map<std::string, std::string> & result) {
-    // The first ABI deliberately accepts only the flat scalar option form used by
-    // audio.cpp's runtime. Model-specific nested configuration comes in ABI v2.
+    // Options stay a flat scalar map: every runtime option upstream defines is a
+    // scalar, and nested model configuration travels through load_options_json.
     if (json == nullptr || *json == '\0') return;
     const std::string input(json);
     size_t i = input.find('{');
@@ -145,9 +255,9 @@ void parse_options(const char * json, std::unordered_map<std::string, std::strin
     }
 }
 
-// Style conditions ride in the flat option map of ABI v1. Scalar style knobs keep
-// their option keys; style tags arrive as "style_tag_<name>" pairs and are moved
-// into StyleCondition::tags so upstream models see a proper style condition.
+// Style conditions ride in the flat option map. Scalar style knobs keep their
+// option keys; style tags arrive as "style_tag_<name>" pairs and are moved into
+// StyleCondition::tags so upstream models see a proper style condition.
 void apply_style_condition(engine::runtime::TaskRequest & request) {
     engine::runtime::StyleCondition style;
     bool has_style = false;
@@ -181,7 +291,104 @@ void apply_style_condition(engine::runtime::TaskRequest & request) {
     }
 }
 
-// ---- JSON serialization shared by audiocpp_model_run_json and the streaming ABI ----
+// ---- artifact input --------------------------------------------------------------
+engine::runtime::ArtifactKind artifact_kind_from_name(const std::string & name) {
+    using K = engine::runtime::ArtifactKind;
+    if (name == "speaker_embedding") return K::SpeakerEmbedding;
+    if (name == "style_embedding") return K::StyleEmbedding;
+    if (name == "prompt_embedding") return K::PromptEmbedding;
+    if (name == "acoustic_tokens") return K::AcousticTokens;
+    if (name == "midi") return K::Midi;
+    if (name == "transcript_alignment") return K::TranscriptAlignment;
+    if (name == "diarization_state") return K::DiarizationState;
+    if (name == "vad_state") return K::VadState;
+    if (name == "custom" || name.empty()) return K::Custom;
+    throw std::invalid_argument(
+        "unsupported artifact kind: " + name +
+        " (expected speaker_embedding, style_embedding, prompt_embedding, acoustic_tokens, midi, "
+        "transcript_alignment, diarization_state, vad_state, or custom)");
+}
+
+int hex_digit(char ch) {
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+std::vector<std::byte> decode_hex(const std::string & text) {
+    if (text.size() % 2 != 0) throw std::invalid_argument("artifact payload_hex must have an even number of digits");
+    std::vector<std::byte> payload;
+    payload.reserve(text.size() / 2);
+    for (size_t i = 0; i < text.size(); i += 2) {
+        const int high = hex_digit(text[i]);
+        const int low = hex_digit(text[i + 1]);
+        if (high < 0 || low < 0) throw std::invalid_argument("artifact payload_hex contains a non-hexadecimal digit");
+        payload.push_back(static_cast<std::byte>((high << 4) | low));
+    }
+    return payload;
+}
+
+std::vector<engine::runtime::VoiceArtifact> parse_artifacts(const char * json) {
+    std::vector<engine::runtime::VoiceArtifact> artifacts;
+    if (json == nullptr || *json == '\0') return artifacts;
+    const auto root = engine::io::json::parse(json);
+    if (!root.is_array()) throw std::invalid_argument("artifacts_json must be a JSON array");
+    for (const auto & item : root.as_array()) {
+        if (!item.is_object()) throw std::invalid_argument("artifacts_json entries must be JSON objects");
+        const std::string kind_name = engine::io::json::optional_string(item, "kind", "");
+        engine::runtime::VoiceArtifact artifact;
+        artifact.kind = artifact_kind_from_name(kind_name);
+        artifact.id = engine::io::json::optional_string(item, "id", "");
+        if (const auto * payload_hex = item.find("payload_hex");
+            payload_hex != nullptr && payload_hex->is_string() && !payload_hex->as_string().empty()) {
+            artifact.payload = decode_hex(payload_hex->as_string());
+        } else if (const auto * payload_text = item.find("payload_text");
+                   payload_text != nullptr && payload_text->is_string()) {
+            artifact.payload = engine::runtime::bytes_from_string(payload_text->as_string());
+        }
+        if (const auto * meta = item.find("meta"); meta != nullptr && meta->is_object()) {
+            for (const auto & [key, value] : meta->as_object()) {
+                artifact.meta[key] = value.is_string() ? value.as_string()
+                    : value.is_number() ? engine::io::json::stringify_number(value.as_number())
+                    : value.is_bool() ? std::string(value.as_bool() ? "true" : "false") : std::string();
+            }
+        }
+        artifacts.push_back(std::move(artifact));
+    }
+    return artifacts;
+}
+
+// ---- audio input -----------------------------------------------------------------
+// The ABI takes interleaved PCM. When the caller passes more than one channel the
+// shim down-mixes to mono before handing samples to the model, so every loader
+// sees the same well-defined layout instead of having to guess.
+engine::runtime::AudioBuffer make_audio_buffer(
+    const float * samples, int32_t count, int32_t sample_rate, int32_t channels) {
+    if (samples == nullptr || count <= 0) throw std::invalid_argument("audio samples must not be empty");
+    if (sample_rate <= 0) throw std::invalid_argument("audio_sample_rate must be positive");
+    if (channels <= 0) throw std::invalid_argument("audio_channels must be positive");
+    engine::runtime::AudioBuffer audio;
+    audio.sample_rate = sample_rate;
+    if (channels == 1) {
+        audio.channels = 1;
+        audio.samples.assign(samples, samples + count);
+        return audio;
+    }
+    const int32_t frames = count / channels;
+    if (frames <= 0) throw std::invalid_argument("audio sample count is smaller than the channel count");
+    audio.channels = 1;
+    audio.samples.resize(static_cast<size_t>(frames));
+    const float scale = 1.0f / static_cast<float>(channels);
+    for (int32_t frame = 0; frame < frames; ++frame) {
+        float sum = 0.0f;
+        for (int32_t channel = 0; channel < channels; ++channel) sum += samples[static_cast<size_t>(frame) * channels + channel];
+        audio.samples[static_cast<size_t>(frame)] = sum * scale;
+    }
+    return audio;
+}
+
+// ---- JSON serialization shared by run_json and the streaming ABI ------------------
 void write_audio_json(std::ostringstream & json, const engine::runtime::AudioBuffer & audio) {
     json << "{\"sample_rate\":" << audio.sample_rate << ",\"channels\":" << audio.channels << ",\"samples\":[";
     for (size_t i = 0; i < audio.samples.size(); ++i) { if (i) json << ','; json << audio.samples[i]; }
@@ -292,11 +499,18 @@ void write_stream_event_json(std::ostringstream & json, const engine::runtime::S
     json << "],\"is_final\":" << (event.is_final ? "true" : "false") << '}';
 }
 
-// Emitted by both audiocpp_model_run_json and audiocpp_stream_finish; keep the
+// Emitted by both audiocpp_model_run_json_ex and audiocpp_stream_finish; keep the
 // schema identical so managed callers can parse both with the same types.
-void write_task_result_json(std::ostringstream & json, const engine::runtime::TaskResult & result) {
+// `task` is the canonical token that actually ran, so callers that let the shim
+// infer the family from the request shape can read back what was chosen.
+void write_task_result_json(std::ostringstream & json, const engine::runtime::TaskResult & result, const char * task) {
     json << "{\"schema_version\":" << AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION;
-    if (result.text_output.has_value()) json << ",\"text_output\":\"" << json_escape(result.text_output->text) << "\"";
+    if (task != nullptr && *task != '\0') json << ",\"task\":\"" << json_escape(task) << "\"";
+    if (result.text_output.has_value()) {
+        json << ",\"text_output\":\"" << json_escape(result.text_output->text) << "\"";
+        if (!result.text_output->language.empty())
+            json << ",\"text_language\":\"" << json_escape(result.text_output->language) << "\"";
+    }
     json << ",\"audio_output\":";
     if (result.audio_output.has_value()) write_audio_json(json, *result.audio_output);
     else json << "null";
@@ -315,7 +529,47 @@ void write_task_result_json(std::ostringstream & json, const engine::runtime::Ta
     for (size_t i = 0; i < result.output_artifacts.size(); ++i) { if (i) json << ','; write_artifact_json(json, result.output_artifacts[i]); }
     json << "]}";
 }
+
+// Fills everything except the task family, which the callers resolve differently.
+void fill_request(
+    engine::runtime::TaskRequest & request,
+    const char * text, const char * text_language,
+    const float * audio_samples, int32_t audio_count, int32_t audio_sample_rate, int32_t audio_channels,
+    const char * voice_id, const float * ref_pcm, int32_t ref_count, int32_t ref_sample_rate,
+    const char * artifacts_json, const char * options_json) {
+    if (text != nullptr && *text != '\0') {
+        request.text_input = engine::runtime::Transcript{
+            std::string(text), text_language == nullptr ? std::string() : std::string(text_language)};
+    }
+    if (audio_samples != nullptr && audio_count > 0) {
+        request.audio_input = make_audio_buffer(audio_samples, audio_count, audio_sample_rate, audio_channels);
+    }
+    if (voice_id != nullptr && *voice_id != '\0') {
+        request.voice = request.voice.value_or(engine::runtime::VoiceCondition{});
+        request.voice->speaker = request.voice->speaker.value_or(engine::runtime::VoiceReference{});
+        request.voice->speaker->cached_voice_id = std::string(voice_id);
+    }
+    if (ref_pcm != nullptr && ref_count > 0) {
+        if (ref_sample_rate <= 0) throw std::invalid_argument("ref_sample_rate must be positive");
+        request.voice = request.voice.value_or(engine::runtime::VoiceCondition{});
+        request.voice->speaker = request.voice->speaker.value_or(engine::runtime::VoiceReference{});
+        engine::runtime::AudioBuffer reference;
+        reference.sample_rate = ref_sample_rate;
+        reference.channels = 1;
+        reference.samples.assign(ref_pcm, ref_pcm + ref_count);
+        request.voice->speaker->audio = std::move(reference);
+    }
+    request.input_artifacts = parse_artifacts(artifacts_json);
+    parse_options(options_json, request.options);
+    apply_style_condition(request);
 }
+
+// ---- streaming ----------------------------------------------------------------
+int32_t open_stream_impl(
+    audiocpp_model * context, const char * task, const char * text, const char * text_language,
+    const char * artifacts_json, const char * options_json,
+    audiocpp_stream ** out_stream, char ** out_info, char * err, size_t errlen);
+}  // namespace
 
 struct audiocpp_model {
     std::unique_ptr<engine::runtime::ILoadedVoiceModel> model;
@@ -333,6 +587,71 @@ struct audiocpp_stream {
     engine::runtime::StreamingOutputKind output = engine::runtime::StreamingOutputKind::FinalResult;
 };
 
+namespace {
+int32_t open_stream_impl(
+    audiocpp_model * context, const char * task, const char * text, const char * text_language,
+    const char * artifacts_json, const char * options_json,
+    audiocpp_stream ** out_stream, char ** out_info, char * err, size_t errlen) {
+    if (context == nullptr || context->model == nullptr || out_stream == nullptr || out_info == nullptr) {
+        set_error(err, errlen, "invalid model or output argument"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_stream = nullptr;
+    *out_info = nullptr;
+    if (task == nullptr || *task == '\0') {
+        set_error(err, errlen, "streaming task is required (e.g. \"asr\", \"vad\")"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    try {
+        const auto task_kind = parse_task_kind(task);
+        bool streaming_supported = false;
+        for (const auto & supported : context->model->capabilities().supported_tasks) {
+            if (supported.task != task_kind) continue;
+            for (const auto mode : supported.modes) {
+                if (mode == engine::runtime::RunMode::Streaming) streaming_supported = true;
+            }
+        }
+        if (!streaming_supported) {
+            set_error(err, errlen, "model does not support streaming for the requested task");
+            return AUDIOCPP_ERR_UNSUPPORTED;
+        }
+        engine::runtime::TaskSpec spec;
+        spec.task = task_kind;
+        spec.mode = engine::runtime::RunMode::Streaming;
+        engine::runtime::TaskRequest request;
+        fill_request(request, text, text_language, nullptr, 0, 0, 0, nullptr, nullptr, 0, 0, artifacts_json, options_json);
+        engine::runtime::SessionOptions session_options;
+        session_options.backend = context->backend; session_options.options = context->session_options;
+        auto session = context->model->create_task_session(spec, session_options);
+        auto * streaming = dynamic_cast<engine::runtime::IStreamingVoiceTaskSession *>(session.get());
+        if (streaming == nullptr) {
+            set_error(err, errlen, "model does not provide a streaming session for the requested task");
+            return AUDIOCPP_ERR_UNSUPPORTED;
+        }
+        session->prepare(engine::runtime::build_preparation_request(request));
+        streaming->start_stream(request);
+        const auto policy = streaming->streaming_policy();
+        std::ostringstream info;
+        info << "{\"family\":\"" << json_escape(session->family()) << "\",\"task\":\""
+             << json_escape(engine::runtime::to_string(task_kind))
+             << "\",\"input\":\"" << (policy.input == engine::runtime::StreamingInputKind::AudioChunks ? "audio_chunks" : "none")
+             << "\",\"output\":\"" << (policy.output == engine::runtime::StreamingOutputKind::PullEvents ? "pull_events" : "final_result")
+             << "\",\"preferred_chunk_samples\":" << policy.preferred_audio_chunk_samples
+             << ",\"preferred_chunk_seconds\":" << policy.preferred_audio_chunk_seconds << "}";
+        auto handle = std::make_unique<audiocpp_stream>();
+        handle->session = std::move(session);
+        handle->streaming = streaming;
+        handle->family = handle->session->family();
+        handle->task = engine::runtime::to_string(task_kind);
+        handle->input = policy.input;
+        handle->output = policy.output;
+        *out_info = copy_string(info.str());
+        *out_stream = handle.release();
+        return AUDIOCPP_OK;
+    } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
+    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+    catch (...) { set_error(err, errlen, "unknown streaming open failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+}
+}  // namespace
+
 extern "C" {
 AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * err, size_t errlen) {
     if (out_info == nullptr || out_info->struct_size < sizeof(audiocpp_abi_info)) {
@@ -340,15 +659,23 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
         return AUDIOCPP_ERR_BAD_ARG;
     }
     out_info->abi_major = 1;
-    out_info->abi_minor = 2;
-    out_info->shim_version = "audiocpp-dotnet-shim 0.3.0";
+    out_info->abi_minor = 3;
+    out_info->shim_version = "audiocpp-dotnet-shim 0.4.0";
     out_info->audio_cpp_commit = kCommit;
     out_info->backend = kBackend;
-    out_info->capabilities = AUDIOCPP_CAP_SYNTHESIZE |
+    uint64_t capabilities = AUDIOCPP_CAP_SYNTHESIZE |
         AUDIOCPP_CAP_TRANSCRIBE |
-        AUDIOCPP_CAP_MODEL_MANAGER |
         AUDIOCPP_CAP_STRUCTURED_RESULTS |
-        AUDIOCPP_CAP_STREAMING;
+        AUDIOCPP_CAP_STREAMING |
+        AUDIOCPP_CAP_TASK_CATALOG |
+        AUDIOCPP_CAP_ARTIFACTS |
+        AUDIOCPP_CAP_EXEC_OPTIONS;
+    // Only advertise the package manager when this build actually links it:
+    // audiocpp_get_package_catalog/audiocpp_install_package return UNSUPPORTED otherwise.
+#if defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
+    capabilities |= AUDIOCPP_CAP_MODEL_MANAGER;
+#endif
+    out_info->capabilities = capabilities;
     return AUDIOCPP_OK;
 }
 
@@ -360,6 +687,21 @@ AUDIOCPP_API int32_t audiocpp_get_loader_catalog(char ** out_json, char * err, s
     *out_json = nullptr;
     try {
         *out_json = copy_string(loader_catalog_json());
+        return AUDIOCPP_OK;
+    } catch (const std::exception & exception) {
+        set_error(err, errlen, exception.what());
+        return AUDIOCPP_ERR_INFERENCE_FAILED;
+    }
+}
+
+AUDIOCPP_API int32_t audiocpp_get_task_catalog(char ** out_json, char * err, size_t errlen) {
+    if (out_json == nullptr) {
+        set_error(err, errlen, "out_json is null");
+        return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_json = nullptr;
+    try {
+        *out_json = copy_string(task_catalog_json());
         return AUDIOCPP_OK;
     } catch (const std::exception & exception) {
         set_error(err, errlen, exception.what());
@@ -464,7 +806,7 @@ AUDIOCPP_API int32_t audiocpp_model_synthesize(audiocpp_model * context, const c
     try {
         engine::runtime::TaskSpec spec;
         spec.mode = engine::runtime::RunMode::Offline;
-        spec.task = task != nullptr && *task != '\0' ? engine::runtime::parse_voice_task_kind(task) : engine::runtime::VoiceTaskKind::Tts;
+        spec.task = task != nullptr && *task != '\0' ? parse_task_kind(task) : engine::runtime::VoiceTaskKind::Tts;
         engine::runtime::SessionOptions session_options;
         session_options.backend = context->backend;
         session_options.options = context->session_options;
@@ -472,26 +814,7 @@ AUDIOCPP_API int32_t audiocpp_model_synthesize(audiocpp_model * context, const c
         auto * offline = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(session.get());
         if (offline == nullptr) throw std::runtime_error("task does not support offline execution");
         engine::runtime::TaskRequest request;
-        request.text_input = engine::runtime::Transcript{std::string(text), std::string()};
-        if (voice_id != nullptr && *voice_id != '\0') {
-            engine::runtime::VoiceCondition voice;
-            engine::runtime::VoiceReference reference;
-            reference.cached_voice_id = std::string(voice_id);
-            voice.speaker = std::move(reference);
-            request.voice = std::move(voice);
-        }
-        if (ref_pcm != nullptr && ref_count > 0) {
-            if (ref_sample_rate <= 0) throw std::invalid_argument("ref_sample_rate must be positive");
-            if (!request.voice.has_value()) request.voice = engine::runtime::VoiceCondition{};
-            if (!request.voice->speaker.has_value()) request.voice->speaker = engine::runtime::VoiceReference{};
-            engine::runtime::AudioBuffer reference;
-            reference.sample_rate = ref_sample_rate;
-            reference.channels = 1;
-            reference.samples.assign(ref_pcm, ref_pcm + ref_count);
-            request.voice->speaker->audio = std::move(reference);
-        }
-        parse_options(options_json, request.options);
-        apply_style_condition(request);
+        fill_request(request, text, nullptr, nullptr, 0, 0, 0, voice_id, ref_pcm, ref_count, ref_sample_rate, nullptr, options_json);
         session->prepare(engine::runtime::build_preparation_request(request));
         const auto result = offline->run(request);
         if (!result.audio_output.has_value() || result.audio_output->samples.empty()) throw std::runtime_error("model returned no audio");
@@ -534,11 +857,8 @@ AUDIOCPP_API int32_t audiocpp_model_transcribe(
         auto * offline = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(session.get());
         if (offline == nullptr) throw std::runtime_error("task does not support offline execution");
         engine::runtime::TaskRequest request;
-        request.audio_input = engine::runtime::AudioBuffer{};
-        request.audio_input->sample_rate = audio_sample_rate;
-        request.audio_input->channels = audio_channels;
-        request.audio_input->samples.assign(audio_samples, audio_samples + audio_count);
-        parse_options(options_json, request.options);
+        fill_request(request, nullptr, nullptr, audio_samples, audio_count, audio_sample_rate, audio_channels,
+                     nullptr, nullptr, 0, 0, nullptr, options_json);
         session->prepare(engine::runtime::build_preparation_request(request));
         const auto result = offline->run(request);
         if (!result.text_output.has_value()) throw std::runtime_error("model returned no transcription");
@@ -553,12 +873,12 @@ AUDIOCPP_API int32_t audiocpp_model_transcribe(
     }
 }
 
-AUDIOCPP_API int32_t audiocpp_model_run_json(
-    audiocpp_model * context, const char * task, const char * text,
+AUDIOCPP_API int32_t audiocpp_model_run_json_ex(
+    audiocpp_model * context, const char * task, const char * text, const char * text_language,
     const float * audio_samples, int32_t audio_count, int32_t audio_sample_rate,
     int32_t audio_channels, const char * voice_id, const float * ref_pcm,
-    int32_t ref_count, int32_t ref_sample_rate, const char * options_json,
-    char ** out_json, char * err, size_t errlen) {
+    int32_t ref_count, int32_t ref_sample_rate, const char * artifacts_json,
+    const char * options_json, char ** out_json, char * err, size_t errlen) {
     if (context == nullptr || context->model == nullptr || out_json == nullptr) {
         set_error(err, errlen, "invalid model or output argument"); return AUDIOCPP_ERR_BAD_ARG;
     }
@@ -568,32 +888,11 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
         // Default the task family from the request shape: audio-only input is
         // transcription, otherwise generation. An explicit task string wins.
         const bool has_audio_input = audio_samples != nullptr && audio_count > 0;
-        spec.task = engine::runtime::parse_voice_task_kind(
-            task == nullptr || *task == '\0' ? (has_audio_input ? "asr" : "tts") : task);
+        spec.task = parse_task_kind(task == nullptr || *task == '\0' ? (has_audio_input ? "asr" : "tts") : task);
         spec.mode = engine::runtime::RunMode::Offline;
         engine::runtime::TaskRequest request;
-        if (text != nullptr && *text != '\0') request.text_input = engine::runtime::Transcript{std::string(text), ""};
-        if (audio_samples != nullptr && audio_count > 0) {
-            request.audio_input = engine::runtime::AudioBuffer{};
-            request.audio_input->sample_rate = audio_sample_rate;
-            request.audio_input->channels = audio_channels;
-            request.audio_input->samples.assign(audio_samples, audio_samples + audio_count);
-        }
-        if (voice_id != nullptr && *voice_id != '\0') {
-            request.voice = engine::runtime::VoiceCondition{};
-            request.voice->speaker = engine::runtime::VoiceReference{};
-            request.voice->speaker->cached_voice_id = std::string(voice_id);
-        }
-        if (ref_pcm != nullptr && ref_count > 0) {
-            request.voice = request.voice.value_or(engine::runtime::VoiceCondition{});
-            request.voice->speaker = request.voice->speaker.value_or(engine::runtime::VoiceReference{});
-            engine::runtime::AudioBuffer reference;
-            reference.sample_rate = ref_sample_rate; reference.channels = 1;
-            reference.samples.assign(ref_pcm, ref_pcm + ref_count);
-            request.voice->speaker->audio = std::move(reference);
-        }
-        parse_options(options_json, request.options);
-        apply_style_condition(request);
+        fill_request(request, text, text_language, audio_samples, audio_count, audio_sample_rate, audio_channels,
+                     voice_id, ref_pcm, ref_count, ref_sample_rate, artifacts_json, options_json);
         engine::runtime::SessionOptions session_options;
         session_options.backend = context->backend; session_options.options = context->session_options;
         auto session = context->model->create_task_session(spec, session_options);
@@ -602,73 +901,36 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
         session->prepare(engine::runtime::build_preparation_request(request));
         const auto result = offline->run(request);
         std::ostringstream json;
-        write_task_result_json(json, result);
+        write_task_result_json(json, result, engine::runtime::to_string(spec.task));
         *out_json = copy_string(json.str()); return AUDIOCPP_OK;
     } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
-    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED;
+    } catch (...) { set_error(err, errlen, "unknown inference failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+}
+
+AUDIOCPP_API int32_t audiocpp_model_run_json(
+    audiocpp_model * context, const char * task, const char * text,
+    const float * audio_samples, int32_t audio_count, int32_t audio_sample_rate,
+    int32_t audio_channels, const char * voice_id, const float * ref_pcm,
+    int32_t ref_count, int32_t ref_sample_rate, const char * options_json,
+    char ** out_json, char * err, size_t errlen) {
+    return audiocpp_model_run_json_ex(context, task, text, nullptr, audio_samples, audio_count, audio_sample_rate,
+        audio_channels, voice_id, ref_pcm, ref_count, ref_sample_rate, nullptr, options_json,
+        out_json, err, errlen);
 }
 
 AUDIOCPP_API int32_t audiocpp_stream_open(
     audiocpp_model * context, const char * task, const char * options_json,
     audiocpp_stream ** out_stream, char ** out_info, char * err, size_t errlen) {
-    if (context == nullptr || context->model == nullptr || out_stream == nullptr || out_info == nullptr) {
-        set_error(err, errlen, "invalid model or output argument"); return AUDIOCPP_ERR_BAD_ARG;
-    }
-    *out_stream = nullptr;
-    *out_info = nullptr;
-    if (task == nullptr || *task == '\0') {
-        set_error(err, errlen, "streaming task is required (e.g. \"asr\", \"vad\")"); return AUDIOCPP_ERR_BAD_ARG;
-    }
-    try {
-        const auto task_kind = engine::runtime::parse_voice_task_kind(task);
-        bool streaming_supported = false;
-        for (const auto & supported : context->model->capabilities().supported_tasks) {
-            if (supported.task != task_kind) continue;
-            for (const auto mode : supported.modes) {
-                if (mode == engine::runtime::RunMode::Streaming) streaming_supported = true;
-            }
-        }
-        if (!streaming_supported) {
-            set_error(err, errlen, "model does not support streaming for the requested task");
-            return AUDIOCPP_ERR_UNSUPPORTED;
-        }
-        engine::runtime::TaskSpec spec;
-        spec.task = task_kind;
-        spec.mode = engine::runtime::RunMode::Streaming;
-        engine::runtime::TaskRequest request;
-        parse_options(options_json, request.options);
-        apply_style_condition(request);
-        engine::runtime::SessionOptions session_options;
-        session_options.backend = context->backend; session_options.options = context->session_options;
-        auto session = context->model->create_task_session(spec, session_options);
-        auto * streaming = dynamic_cast<engine::runtime::IStreamingVoiceTaskSession *>(session.get());
-        if (streaming == nullptr) {
-            set_error(err, errlen, "model does not provide a streaming session for the requested task");
-            return AUDIOCPP_ERR_UNSUPPORTED;
-        }
-        session->prepare(engine::runtime::build_preparation_request(request));
-        streaming->start_stream(request);
-        const auto policy = streaming->streaming_policy();
-        std::ostringstream info;
-        info << "{\"family\":\"" << json_escape(session->family()) << "\",\"task\":\""
-             << json_escape(engine::runtime::to_string(task_kind))
-             << "\",\"input\":\"" << (policy.input == engine::runtime::StreamingInputKind::AudioChunks ? "audio_chunks" : "none")
-             << "\",\"output\":\"" << (policy.output == engine::runtime::StreamingOutputKind::PullEvents ? "pull_events" : "final_result")
-             << "\",\"preferred_chunk_samples\":" << policy.preferred_audio_chunk_samples
-             << ",\"preferred_chunk_seconds\":" << policy.preferred_audio_chunk_seconds << "}";
-        auto handle = std::make_unique<audiocpp_stream>();
-        handle->session = std::move(session);
-        handle->streaming = streaming;
-        handle->family = handle->session->family();
-        handle->task = task;
-        handle->input = policy.input;
-        handle->output = policy.output;
-        *out_info = copy_string(info.str());
-        *out_stream = handle.release();
-        return AUDIOCPP_OK;
-    } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
-    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED; }
-    catch (...) { set_error(err, errlen, "unknown streaming open failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
+    return open_stream_impl(context, task, nullptr, nullptr, nullptr, options_json, out_stream, out_info, err, errlen);
+}
+
+AUDIOCPP_API int32_t audiocpp_stream_open_ex(
+    audiocpp_model * context, const char * task, const char * text, const char * text_language,
+    const char * artifacts_json, const char * options_json,
+    audiocpp_stream ** out_stream, char ** out_info, char * err, size_t errlen) {
+    return open_stream_impl(context, task, text, text_language, artifacts_json, options_json,
+        out_stream, out_info, err, errlen);
 }
 
 AUDIOCPP_API int32_t audiocpp_stream_push_pcm(
@@ -686,12 +948,13 @@ AUDIOCPP_API int32_t audiocpp_stream_push_pcm(
         set_error(err, errlen, "sample_rate and channels must be positive"); return AUDIOCPP_ERR_BAD_ARG;
     }
     try {
+        const auto mono = make_audio_buffer(samples, sample_count, sample_rate, channels);
         engine::runtime::AudioChunk chunk;
-        chunk.sample_rate = sample_rate;
-        chunk.channels = channels;
+        chunk.sample_rate = mono.sample_rate;
+        chunk.channels = mono.channels;
         chunk.start_sample = stream->samples_pushed;
-        chunk.samples.assign(samples, samples + sample_count);
-        stream->samples_pushed += sample_count;
+        chunk.samples = mono.samples;
+        stream->samples_pushed += mono.channels == channels ? sample_count : static_cast<int64_t>(mono.samples.size());
         std::ostringstream json;
         json << "{\"events\":[";
         bool first = true;
@@ -720,7 +983,7 @@ AUDIOCPP_API int32_t audiocpp_stream_finish(audiocpp_stream * stream, char ** ou
     try {
         const auto result = stream->streaming->finish_stream();
         std::ostringstream json;
-        write_task_result_json(json, result);
+        write_task_result_json(json, result, stream->task.c_str());
         *out_json = copy_string(json.str());
         return AUDIOCPP_OK;
     } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;

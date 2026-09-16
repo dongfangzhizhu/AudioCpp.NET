@@ -38,6 +38,9 @@ internal static partial class NativeMethods
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_get_loader_catalog")]
     internal static partial int GetLoaderCatalog(out IntPtr json, IntPtr error, nuint errorLength);
 
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_get_task_catalog")]
+    internal static partial int GetTaskCatalog(out IntPtr json, IntPtr error, nuint errorLength);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_get_package_catalog")]
     internal static partial int GetPackageCatalog(out IntPtr json, IntPtr error, nuint errorLength);
 
@@ -75,10 +78,21 @@ internal static partial class NativeMethods
         float* referencePcm, int referenceCount, int referenceSampleRate, string? optionsJson,
         out IntPtr outputJson, IntPtr error, nuint errorLength);
 
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_model_run_json_ex", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int ModelRunJsonEx(SafeModelHandle model, string? task, string? text, string? textLanguage,
+        float* audioSamples, int audioCount, int audioSampleRate, int audioChannels, string? voiceId,
+        float* referencePcm, int referenceCount, int referenceSampleRate, string? artifactsJson, string? optionsJson,
+        out IntPtr outputJson, IntPtr error, nuint errorLength);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_open", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int StreamOpen(
         SafeModelHandle model, string task, string? optionsJson,
         out IntPtr stream, out IntPtr info, IntPtr error, nuint errorLength);
+
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_open_ex", StringMarshalling = StringMarshalling.Utf8)]
+    internal static partial int StreamOpenEx(
+        SafeModelHandle model, string task, string? text, string? textLanguage, string? artifactsJson,
+        string? optionsJson, out IntPtr stream, out IntPtr info, IntPtr error, nuint errorLength);
 
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_push_pcm", StringMarshalling = StringMarshalling.Utf8)]
     internal static unsafe partial int StreamPushPcm(

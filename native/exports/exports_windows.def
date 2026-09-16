@@ -7,10 +7,13 @@ EXPORTS
   audiocpp_model_synthesize
   audiocpp_model_transcribe
   audiocpp_model_run_json
+  audiocpp_model_run_json_ex
   audiocpp_get_loader_catalog
+  audiocpp_get_task_catalog
   audiocpp_get_package_catalog
   audiocpp_install_package
   audiocpp_stream_open
+  audiocpp_stream_open_ex
   audiocpp_stream_push_pcm
   audiocpp_stream_finish
   audiocpp_stream_free

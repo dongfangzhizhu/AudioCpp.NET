@@ -26,12 +26,9 @@ public sealed record TtsRequest
     public ReadOnlyMemory<float> ReferencePcm { get; init; }
     public int ReferenceSampleRate { get; init; }
     public IReadOnlyDictionary<string, string>? Options { get; init; }
-    public string? Language { get; init; }
-    public string? Emotion { get; init; }
-    public float? SpeakingRate { get; init; }
-    public float? PitchShift { get; init; }
-    public float? EnergyScale { get; init; }
-    public IReadOnlyDictionary<string, string>? StyleTags { get; init; }
+    /// <summary>Upstream StyleCondition. Only meaningful for models whose loader
+    /// catalog advertises <c>supports_style_condition</c> (for example qwen3_tts).</summary>
+    public AudioCppStyle? Style { get; init; }
 }
 
 public sealed record AsrRequest
@@ -56,7 +53,13 @@ public sealed record AudioCppArtifact(string Id, string Kind, string PayloadHex,
 public sealed record AudioCppTaskResult(JsonElement RawJson)
 {
     public long? SchemaVersion => RawJson.TryGetProperty("schema_version", out var value) && value.TryGetInt64(out var parsed) ? parsed : null;
+    /// <summary>Canonical task token that actually ran. Present from structured
+    /// result schema 2 onward; older shims return <c>null</c>, in which case the
+    /// caller already knows the token it asked for.</summary>
+    public string? Task => RawJson.TryGetProperty("task", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     public string? Text => RawJson.TryGetProperty("text_output", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    /// <summary>Language the text output was produced in, when the loader reports one.</summary>
+    public string? TextLanguage => RawJson.TryGetProperty("text_language", out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     public AudioCppAudioClip? AudioOutput => RawJson.TryGetProperty("audio_output", out var value) && value.ValueKind == JsonValueKind.Object ? ParseAudioClip(value) : null;
     public IReadOnlyList<AudioCppNamedAudio> NamedAudioOutputs => Array("named_audio_outputs").Select(ParseNamedAudio).ToArray();
     public IReadOnlyList<AudioCppSpeechSegment> SpeechSegments => Array("speech_segments").Select(ParseSpeechSegment).ToArray();
@@ -109,6 +112,9 @@ public static class AudioCppCapabilities
     public const ulong ModelManager = 1UL << 2;
     public const ulong StructuredResults = 1UL << 3;
     public const ulong Streaming = 1UL << 4;
+    public const ulong TaskCatalog = 1UL << 5;
+    public const ulong Artifacts = 1UL << 6;
+    public const ulong ExecOptions = 1UL << 7;
 }
 public sealed record AudioCppLoader(string Family, string InstructionsPolicy, IReadOnlyList<string> ApiEndpoints,
     IReadOnlyList<AudioCppLoaderTask> Tasks, IReadOnlyList<string> Languages,
@@ -170,10 +176,31 @@ public sealed class AudioCppRuntime : IDisposable
         catch (Exception exception) when (exception is AudioCppException or DllNotFoundException) { return null; }
     }
 
+    /// <summary>Resolves a package ID to one of the families compiled into the
+    /// loaded native shim, or null when nothing matches.</summary>
+    public string? ResolveFamily(string packageId) => DeriveFamily(packageId);
+
+    /// <summary>The families (loaders) compiled into the native shim.</summary>
+    public IReadOnlyList<string> LoaderFamilies() => ListLoaders().Select(loader => loader.Family).ToArray();
+
     public IReadOnlyList<AudioCppLoader> ListLoaders()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         try { return CatalogJson.ParseLoaders(InteropOperations.GetLoaderCatalog()); }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        { throw new AudioCppException(exception.Message, exception); }
+    }
+
+    /// <summary>
+    /// Every task the native shim can dispatch, with its accepted aliases and the
+    /// typical result channels. Falls back to the compiled-in table when the shim
+    /// predates <see cref="AudioCppCapabilities.TaskCatalog"/>.
+    /// </summary>
+    public IReadOnlyList<AudioCppTaskInfo> ListTaskKinds()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if ((BuildInfo.Capabilities & AudioCppCapabilities.TaskCatalog) == 0) return AudioCppTaskCatalog.Fallback;
+        try { return CatalogJson.ParseTasks(InteropOperations.GetTaskCatalog()); }
         catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
         { throw new AudioCppException(exception.Message, exception); }
     }
@@ -210,18 +237,8 @@ public sealed class AudioCppRuntime : IDisposable
 
     public void Dispose() => _disposed = true;
 
-    internal static IReadOnlyDictionary<string, string> BuildRequestOptions(TtsRequest? request)
-    {
-        var options = new Dictionary<string, string>(request?.Options ?? new Dictionary<string, string>());
-        if (request is null) return options;
-        if (request.Language is not null) options["style_language"] = request.Language;
-        if (request.Emotion is not null) options["emotion"] = request.Emotion;
-        if (request.SpeakingRate is not null) options["speaking_rate"] = request.SpeakingRate.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (request.PitchShift is not null) options["pitch_shift"] = request.PitchShift.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (request.EnergyScale is not null) options["energy_scale"] = request.EnergyScale.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        if (request.StyleTags is not null) foreach (var tag in request.StyleTags) options[$"style_tag_{tag.Key}"] = tag.Value;
-        return options;
-    }
+    internal static IReadOnlyDictionary<string, string> BuildRequestOptions(TtsRequest? request) =>
+        AudioCppRunRequests.BuildOptions(request?.Style, request?.Options);
 
     internal static void ValidateRunRequests(TtsRequest? request, AsrRequest? audioRequest)
     {
@@ -250,6 +267,16 @@ internal static class CatalogJson
                 loader.GetProperty("supports_speaker_reference").GetBoolean(),
                 loader.GetProperty("supports_style_condition").GetBoolean(),
                 loader.GetProperty("supports_timestamps").GetBoolean())).ToArray();
+    }
+
+    internal static IReadOnlyList<AudioCppTaskInfo> ParseTasks(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        return document.RootElement.GetProperty("tasks").EnumerateArray().Select(task =>
+            new AudioCppTaskInfo(task.GetProperty("task").GetString() ?? "",
+                task.GetProperty("input").GetString() ?? "",
+                Strings(task, "typical_outputs"),
+                Strings(task, "aliases"))).ToArray();
     }
 
     internal static IReadOnlyList<AudioCppPackage> ParsePackages(string json)
@@ -281,22 +308,69 @@ public sealed class AudioCppModel : IDisposable
 
     internal bool IsDisposed => _disposed;
 
-    public AudioCppStreamSession StartStreaming(string task, IReadOnlyDictionary<string, string>? options = null)
+    /// <summary>Opens a streaming session for <paramref name="task"/> with no prompt.</summary>
+    public AudioCppStreamSession StartStreaming(string task, IReadOnlyDictionary<string, string>? options = null) =>
+        StartStreaming(new AudioCppStreamingOptions { Task = task, SampleRate = 0, Options = options });
+
+    /// <summary>
+    /// Opens a streaming session. <paramref name="options"/> carries the task, the
+    /// optional text prompt (streaming ASR), its language, style conditions and
+    /// input artifacts.
+    /// </summary>
+    public AudioCppStreamSession StartStreaming(AudioCppStreamingOptions options)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        ArgumentException.ThrowIfNullOrWhiteSpace(task);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.Task);
         if ((_capabilities & AudioCppCapabilities.Streaming) == 0)
             throw new NotSupportedException(
                 "The loaded native shim does not advertise AUDIOCPP_CAP_STREAMING; rebuild the shim to use streaming sessions.");
+        var artifacts = AudioCppRunRequests.SerializeArtifacts(options.Artifacts);
+        var text = string.IsNullOrWhiteSpace(options.Text) ? null : options.Text;
+        var sessionOptions = AudioCppRuntime.ToJson(AudioCppRunRequests.BuildOptions(options.Style, options.Options));
         try
         {
-            var (handle, info) = InteropOperations.OpenStream(_handle, task, AudioCppRuntime.ToJson(options));
+            var (handle, info) = artifacts is null && text is null
+                ? InteropOperations.OpenStream(_handle, options.Task, sessionOptions)
+                : InteropOperations.OpenStream(_handle, options.Task, text, options.TextLanguage, artifacts, sessionOptions);
             return new AudioCppStreamSession(this, handle, AudioCppStreamInfo.Parse(info));
         }
         catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
         {
             throw new AudioCppInferenceException(exception.Message, exception);
         }
+    }
+
+    /// <summary>
+    /// Structured run for any task the loaded model supports: text, audio, a voice
+    /// reference, style conditions and input artifacts are all optional. The
+    /// returned result exposes every TaskResult channel, including the ones the
+    /// scalar <see cref="Synthesize"/> / <see cref="Transcribe"/> helpers drop
+    /// (named audio outputs, speech segments, speaker turns, word timestamps and
+    /// artifacts).
+    /// </summary>
+    public AudioCppTaskResult Run(AudioCppRunRequest request)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        AudioCppRunRequests.Validate(request);
+        var input = new AudioCppRunInput(
+            request.Task,
+            string.IsNullOrWhiteSpace(request.Text) ? null : request.Text,
+            request.TextLanguage,
+            request.Audio,
+            request.Audio.IsEmpty ? 0 : request.SampleRate,
+            request.Audio.IsEmpty ? 1 : request.Channels,
+            request.VoiceId,
+            request.ReferencePcm,
+            request.ReferenceSampleRate,
+            AudioCppRunRequests.SerializeArtifacts(request.Artifacts),
+            AudioCppRuntime.ToJson(AudioCppRunRequests.BuildOptions(request.Style, request.Options)));
+        string json;
+        try { json = InteropOperations.RunJson(_handle, input); }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        { throw new AudioCppInferenceException(exception.Message, exception); }
+        using var document = JsonDocument.Parse(json);
+        return new AudioCppTaskResult(document.RootElement.Clone());
     }
 
     public AudioBuffer Synthesize(TtsRequest request)
@@ -388,7 +462,8 @@ public sealed record AudioCppVoiceActivity(string Kind, long Sample, float Proba
 
 public sealed record AudioCppStreamEvent(
     string? PartialText, string? Language, IReadOnlyList<AudioCppVoiceActivity> VoiceActivity,
-    AudioCppAudioClip? AudioOutput, IReadOnlyList<AudioCppSpeakerTurn> SpeakerTurns,
+    AudioCppAudioClip? AudioOutput, IReadOnlyList<AudioCppNamedAudio> NamedAudioOutputs,
+    IReadOnlyList<AudioCppSpeakerTurn> SpeakerTurns,
     IReadOnlyList<AudioCppWordTimestamp> WordTimestamps, IReadOnlyList<AudioCppArtifact> Artifacts,
     bool IsFinal)
 {
@@ -410,6 +485,7 @@ public sealed record AudioCppStreamEvent(
             ? voiceActivity.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.Object).Select(ParseVoiceActivity).ToArray() : [],
         value.TryGetProperty("audio_output", out var audio) && audio.ValueKind == JsonValueKind.Object
             ? AudioCppTaskResult.ParseAudioClip(audio) : null,
+        AudioCppTaskResult.Array(value, "named_audio_outputs").Select(AudioCppTaskResult.ParseNamedAudio).ToArray(),
         AudioCppTaskResult.Array(value, "speaker_turns").Select(AudioCppTaskResult.ParseSpeakerTurn).ToArray(),
         AudioCppTaskResult.Array(value, "word_timestamps").Select(AudioCppTaskResult.ParseWordTimestamp).ToArray(),
         AudioCppTaskResult.Array(value, "output_artifacts").Select(AudioCppTaskResult.ParseArtifact).ToArray(),
@@ -428,7 +504,8 @@ public sealed record AudioCppStreamEvent(
     /// </summary>
     public bool HasContent =>
         PartialText is not null || !string.IsNullOrEmpty(Language) || VoiceActivity.Count > 0 ||
-        AudioOutput is not null || SpeakerTurns.Count > 0 || WordTimestamps.Count > 0 || Artifacts.Count > 0;
+        AudioOutput is not null || NamedAudioOutputs.Count > 0 || SpeakerTurns.Count > 0 ||
+        WordTimestamps.Count > 0 || Artifacts.Count > 0;
 }
 
 /// <summary>

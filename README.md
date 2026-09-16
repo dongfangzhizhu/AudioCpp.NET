@@ -63,8 +63,9 @@ dependency (system OpenSSL or the pinned BoringSSL archive).
 
 The shim exposes upstream's `IStreamingVoiceTaskSession` through four additive
 ABI exports (`audiocpp_stream_open`, `audiocpp_stream_push_pcm`,
-`audiocpp_stream_finish`, `audiocpp_stream_free`), advertises
-`AUDIOCPP_CAP_STREAMING`, and reports ABI minor 2. `stream_open` rejects models
+`audiocpp_stream_finish`, `audiocpp_stream_free`; `stream_open_ex` additionally
+accepts inline text, style and input artifacts), advertises
+`AUDIOCPP_CAP_STREAMING`, and reports ABI minor 3. `stream_open` rejects models
 whose loader does not list a `streaming` mode for the requested task, so offline
 models fail fast with `model does not support streaming for the requested task`.
 
@@ -101,7 +102,19 @@ dotnet run --project src/AudioCpp.NET.Console
 ```
 
 Scripted subcommands are unchanged and `help` still prints the command
-reference.
+reference. Two additional subcommands exercise the full ABI surface:
+
+- `tasks --native PATH` prints the native task catalog: every canonical token
+  (`vad/asr/diar/sep/gen/tts/clon/vc/s2s/align/vdes/spk/svc/midi`) plus the
+  model-spec aliases (`audio_generation/music/sfx/edit/clone/design/speaker/codec`)
+  with their input shape, typical outputs and aliases.
+- `run --model DIR --task TOKEN [--input WAV | --text TEXT] [--text-language LANG]
+  [--artifact kind:hex|kind:path ...] [--style-language LANG] [--emotion E]
+  [--speaking-rate R] [--pitch-shift S] [--energy-scale X] [--style-tag k=v]
+  [--option k=v ...]` runs any task through the structured-result ABI and prints
+  the full JSON result (segments, turns, word timestamps, artifacts and audio
+  clips written next to the output directory). Unknown tokens are rejected with
+  the accepted-token list.
 
 ## Web workbench
 
@@ -115,6 +128,13 @@ Every detected model shows a completeness badge (`✓ complete` / `✗ incomplet
 / `unmanaged`) plus a **VERIFY** button that re-checks the package manifest on
 demand (`POST /api/verify`). A failed install reports the missing files
 directly in the studio log.
+
+The **TASK CONSOLE** panel lists the native build's ABI info, capability flags
+and the full task catalog (`GET /api/build`, `GET /api/tasks`), and drives the
+generic run endpoint (`POST /api/run`): pick any task token, supply text
+and/or a WAV, optional style/artifacts/options, and get the structured result —
+segments, speaker turns, word timestamps, artifacts — with generated audio
+clips rendered inline for playback and download.
 
 The **VAD STREAM** deck streams an uploaded WAV through a streaming session
 (`POST /api/stream`). It reports the negotiated policy, the chunk size actually
