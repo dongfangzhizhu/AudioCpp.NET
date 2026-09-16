@@ -83,6 +83,12 @@ add_executable(audiocpp_dotnet_abi_smoke native/tests/abi_smoke.cpp)
 target_include_directories(audiocpp_dotnet_abi_smoke PRIVATE native/include)
 target_link_libraries(audiocpp_dotnet_abi_smoke PRIVATE audiocpp_dotnet_native)
 
+# End-to-end probe: real model inference through the C ABI (no managed code),
+# so the same binary can prove every matrix cell (win/linux x cpu/cuda).
+add_executable(audiocpp_dotnet_e2e native/tests/e2e_probe.cpp)
+target_include_directories(audiocpp_dotnet_e2e PRIVATE native/include)
+target_link_libraries(audiocpp_dotnet_e2e PRIVATE audiocpp_dotnet_native)
+
 if(APPLE)
   target_link_options(audiocpp_dotnet_native PRIVATE "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/native/exports/exports_macos.txt")
 elseif(UNIX)
