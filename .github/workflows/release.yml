@@ -149,7 +149,13 @@ jobs:
       # Asserts the artifacts really contain the natives and the interop assembly,
       # so a packaging regression fails here instead of at a consumer's first run.
       - name: Verify package contents
-        run: bash eng/packaging/verify-packages.sh packages "${{ steps.natives.outcome }}"
+        env:
+          NATIVES_OUTCOME: ${{ steps.natives.outcome }}
+        run: |
+          set -euo pipefail
+          mode=skipped
+          [ "$NATIVES_OUTCOME" = "success" ] && mode=staged
+          python3 eng/packaging/verify_packages.py packages --natives "$mode"
 
       - uses: actions/upload-artifact@v4
         with:

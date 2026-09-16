@@ -42,17 +42,22 @@ jobs:
       - uses: actions/checkout@v4
 
       # CMakeLists.txt asserts the checkout is at the pinned revision, so fetch that
-      # exact commit rather than a branch tip. The shim repository expects upstream to
-      # be its sibling (AUDIOCPP_SRC defaults to ../audio.cpp).
+      # exact commit rather than a branch tip. Both the URL and the SHA come from
+      # eng/upstream.lock.json, which is the single source of truth for the pin.
       - name: Check out the pinned audio.cpp revision
         shell: bash
         run: |
           set -euo pipefail
           SHA=$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' eng/upstream.lock.json | head -1)
+          URL=$(sed -n 's/.*"repository": *"\([^"]*\)".*/\1/p' eng/upstream.lock.json | head -1)
           test -n "$SHA" || { echo "could not read the pinned commit from eng/upstream.lock.json"; exit 1; }
+          test -n "$URL" || { echo "could not read the upstream repository from eng/upstream.lock.json"; exit 1; }
+          case "$URL" in *.git) ;; *) URL="$URL.git" ;; esac
+          # The shim expects upstream to be its sibling (AUDIOCPP_SRC defaults to
+          # ../audio.cpp), so the directory name is part of the contract.
           UPSTREAM="$GITHUB_WORKSPACE/../audio.cpp"
           git init "$UPSTREAM"
-          git -C "$UPSTREAM" remote add origin https://github.com/0xShug0/audio.cpp.git
+          git -C "$UPSTREAM" remote add origin "$URL"
           git -C "$UPSTREAM" fetch --depth 1 origin "$SHA"
           git -C "$UPSTREAM" checkout --detach FETCH_HEAD
           echo "pinned upstream: $(git -C "$UPSTREAM" rev-parse HEAD) (expected $SHA)"

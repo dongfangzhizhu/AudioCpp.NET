@@ -34,7 +34,7 @@ RUNTIME_REQUIRED = [
     "README-runtime.md",
 ]
 
-VERSIONED = re.compile(r"\.\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\.(nupkg|snupkg)$")
+VERSION = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"
 
 
 class Report:
@@ -50,15 +50,17 @@ class Report:
 
 
 def pick(packages: Path, package_id: str, extension: str) -> Path | None:
-    """Find <package_id>.<version>.<ext>, ignoring the runtime packages' own IDs."""
-    candidates = [
-        p for p in packages.glob(f"{package_id}.*.{extension}")
-        if VERSIONED.search(p.name)
-    ]
-    # AudioCpp.NET.Runtime* also starts with "AudioCpp.NET."; require an exact prefix
-    # boundary so the managed package is never confused with a runtime package.
-    exact = [p for p in candidates if p.name.split(".", 1)[0] + "." + p.name.split(".", 1)[1].split(".")[0] == package_id]
-    return sorted(exact or candidates)[0] if (exact or candidates) else None
+    """Find the one file named exactly <package_id>.<version>.<extension>.
+
+    Matching on the literal "<package_id>." prefix followed by a version is what
+    keeps "AudioCpp.NET" from also selecting "AudioCpp.NET.Runtime.0.1.0.nupkg":
+    the character after the prefix must begin a version, not continue the ID.
+    """
+    pattern = re.compile(
+        rf"^{re.escape(package_id)}\.{VERSION}\.{re.escape(extension)}$"
+    )
+    matches = sorted(p for p in packages.iterdir() if pattern.match(p.name))
+    return matches[0] if matches else None
 
 
 def entries(path: Path) -> set[str]:
