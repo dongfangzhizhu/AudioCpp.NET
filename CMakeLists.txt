@@ -42,7 +42,10 @@ set(AUDIOCPP_BUILD_NATIVE_MODEL_MANAGER "${AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER}
 if(MSVC)
   # audio.cpp contains UTF-8 source text. Do not let the host ACP (for example
   # code page 936) alter identifiers or literals in a distributable build.
-  add_compile_options(/utf-8)
+  # CUDA sources must be excluded: nvcc receives raw options, and a bare
+  # /utf-8 is parsed as an extra input file ("A single input file is
+  # required for a non-link phase when an outputfile is specified").
+  add_compile_options("$<$<COMPILE_LANG_AND_ID:C,MSVC>:/utf-8>" "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/utf-8>")
 endif()
 
 if(AUDIOCPP_BACKEND STREQUAL "cuda")

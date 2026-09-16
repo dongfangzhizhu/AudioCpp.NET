@@ -170,6 +170,22 @@ cmake --build build/native --config Release --target audiocpp_dotnet_native --pa
 
 The native build is intentionally separate from normal managed unit tests. End-to-end inference additionally requires a compatible model.
 
+### GPU (CUDA) builds
+
+Set `-DAUDIOCPP_BACKEND=cuda` (plus `-DCUDAToolkit_ROOT=… -DCMAKE_CUDA_ARCHITECTURES=89`
+for an RTX 4090) in the same commands. Read-only environment preflight checks:
+
+```powershell
+# Windows: driver, nvcc, MSVC, CUDA headers/VS integration
+powershell -NoProfile -ExecutionPolicy Bypass -File eng/Check-WindowsGpuBuild.ps1
+# Debian/WSL: driver, nvcc, CUDA headers and libcudart.so
+wsl -d Debian -- bash eng/check-debian-gpu-build.sh
+```
+
+On MSVC, the global `/utf-8` flag is scoped to C/C++ sources only (`COMPILE_LANG_AND_ID`
+generator expressions) because nvcc parses a bare `/utf-8` as an extra input file and
+aborts CUDA compilation.
+
 ## Troubleshooting
 
 ### `DllNotFoundException: Unable to load audiocpp_dotnet_native`
