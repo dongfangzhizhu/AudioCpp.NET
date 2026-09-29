@@ -716,7 +716,7 @@ Usage:
 
 Run options (any of the 14 tasks, or a model_spec alias such as music/clone/design):
   --task TASK            vad|asr|diar|sep|gen|tts|clon|vc|s2s|align|vdes|spk|svc|midi
-                         aliases: audio_generation, music, sfx, edit, clone, design, speaker, codec
+                         aliases: audio_generation, music, sfx, edit, clone, design, speaker
   --model PATH           Model package directory or manifest
   --family NAME          Force a loader family instead of deriving it from the manifest
   --text TEXT            Text input (TTS, cloning, design, alignment, ...)

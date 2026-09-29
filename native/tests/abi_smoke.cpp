@@ -30,12 +30,13 @@ int main() {
         std::cerr << "ABI query failed: " << error << '\n';
         return 1;
     }
-    if (info.abi_major != 1 || info.abi_minor != 3) return 2;
-    if (std::strcmp(info.audio_cpp_commit, "78d47706c30ef215ba9ad3559baff309efeb5260") != 0) return 3;
+    if (info.abi_major != 1 || info.abi_minor != 4) return 2;
+    if (std::strcmp(info.audio_cpp_commit, "f825d1d1b92af309585aeb656b2a59c44fc603eb") != 0) return 3;
     if (info.shim_version == nullptr || info.backend == nullptr) return 4;
     const uint64_t required = AUDIOCPP_CAP_SYNTHESIZE | AUDIOCPP_CAP_TRANSCRIBE |
         AUDIOCPP_CAP_STRUCTURED_RESULTS | AUDIOCPP_CAP_STREAMING |
-        AUDIOCPP_CAP_TASK_CATALOG | AUDIOCPP_CAP_ARTIFACTS | AUDIOCPP_CAP_EXEC_OPTIONS;
+        AUDIOCPP_CAP_TASK_CATALOG | AUDIOCPP_CAP_ARTIFACTS | AUDIOCPP_CAP_EXEC_OPTIONS |
+        AUDIOCPP_CAP_BATCH | AUDIOCPP_CAP_OPTION_ARRAYS;
     if ((info.capabilities & required) != required) return 7;
 
     char * catalog = nullptr;
@@ -45,13 +46,14 @@ int main() {
 
     char * tasks = nullptr;
     if (audiocpp_get_task_catalog(&tasks, error, sizeof(error)) != AUDIOCPP_OK || tasks == nullptr) return 8;
-    // Every canonical token must be published, and all eight model_spec aliases that
-    // audiocpp_model_run_json accepts must be discoverable through it. Omitting an
-    // alias here is how a model becomes unreachable from managed code.
+    // Every canonical token must be published, and all seven spec aliases that
+    // audiocpp_model_run_json accepts must be discoverable through it (upstream
+    // removed the fake "codec" alias when the task vocabulary became public, #544).
+    // Omitting an alias here is how a model becomes unreachable from managed code.
     for (const char * token : {"\"vad\"", "\"asr\"", "\"diar\"", "\"sep\"", "\"gen\"", "\"tts\"", "\"clon\"",
                                "\"vc\"", "\"s2s\"", "\"align\"", "\"vdes\"", "\"spk\"", "\"svc\"", "\"midi\"",
                                "\"audio_generation\"", "\"music\"", "\"sfx\"", "\"edit\"",
-                               "\"clone\"", "\"design\"", "\"speaker\"", "\"codec\""}) {
+                               "\"clone\"", "\"design\"", "\"speaker\""}) {
         if (!contains(tasks, token)) {
             std::cerr << "task catalog is missing " << token << '\n';
             audiocpp_buffer_free(tasks);
@@ -65,6 +67,8 @@ int main() {
     char * json = nullptr;
     if (audiocpp_model_run_json_ex(nullptr, "tts", nullptr, nullptr, nullptr, 0, 0, 0, nullptr, nullptr, 0, 0,
                                    nullptr, nullptr, &json, error, sizeof(error)) != AUDIOCPP_ERR_BAD_ARG) return 10;
+    if (audiocpp_model_run_json_batch(nullptr, "asr", "[]", nullptr, 0, 0, 0,
+                                      &json, error, sizeof(error)) != AUDIOCPP_ERR_BAD_ARG) return 12;
     audiocpp_stream * stream = nullptr;
     char * streamInfo = nullptr;
     if (audiocpp_stream_open_ex(nullptr, "vad", nullptr, nullptr, nullptr, nullptr,

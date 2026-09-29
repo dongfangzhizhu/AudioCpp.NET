@@ -82,9 +82,9 @@ public sealed class NativeIntegrationTests
         var info = runtime.BuildInfo;
 
         Assert.Equal(1u, info.AbiMajor);
-        Assert.True(info.AbiMinor >= 3, $"the wrappers need structured-result schema 2 / abi 1.3+, reported 1.{info.AbiMinor}");
+        Assert.True(info.AbiMinor >= 4, $"the wrappers need structured-result schema 2 / abi 1.4+, reported 1.{info.AbiMinor}");
         Assert.False(string.IsNullOrWhiteSpace(info.ShimVersion));
-        Assert.Equal("78d47706c30ef215ba9ad3559baff309efeb5260", info.AudioCppCommit);
+        Assert.Equal("f825d1d1b92af309585aeb656b2a59c44fc603eb", info.AudioCppCommit);
 
         foreach (var (bit, name) in new (ulong Bit, string Name)[]
         {
@@ -96,6 +96,8 @@ public sealed class NativeIntegrationTests
             (AudioCppCapabilities.TaskCatalog, nameof(AudioCppCapabilities.TaskCatalog)),
             (AudioCppCapabilities.Artifacts, nameof(AudioCppCapabilities.Artifacts)),
             (AudioCppCapabilities.ExecOptions, nameof(AudioCppCapabilities.ExecOptions)),
+            (AudioCppCapabilities.Batch, nameof(AudioCppCapabilities.Batch)),
+            (AudioCppCapabilities.OptionArrays, nameof(AudioCppCapabilities.OptionArrays)),
         })
             Assert.True((info.Capabilities & bit) != 0, $"missing capability {name}");
     }

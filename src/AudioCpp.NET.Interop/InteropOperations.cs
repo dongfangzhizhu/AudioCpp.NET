@@ -165,6 +165,24 @@ internal static class InteropOperations
         }
     }
 
+    /// <summary>Batched structured run. <paramref name="requestsJson"/> is the
+    /// serialized request array (each entry carries its audio as an offset/count
+    /// pair into <paramref name="audioPool"/>); the native side returns one result
+    /// per request, in order.</summary>
+    internal static unsafe string RunJsonBatch(SafeModelHandle model, string? task, string requestsJson,
+        ReadOnlySpan<float> audioPool, int sampleRate, int channels)
+    {
+        fixed (float* poolPtr = audioPool)
+        using (var error = new NativeErrorBuffer())
+        {
+            var status = NativeMethods.ModelRunJsonBatch(model, task, requestsJson,
+                poolPtr, audioPool.Length, sampleRate, channels,
+                out var json, error.Pointer, (nuint)error.Length);
+            try { if (status != 0) throw new NativeCallException(status, error.Text); return Marshal.PtrToStringUTF8(json) ?? "{}"; }
+            finally { if (json != IntPtr.Zero) NativeMethods.BufferFree(json); }
+        }
+    }
+
     internal static (SafeStreamHandle Handle, string Info) OpenStream(SafeModelHandle model, string task, string? options)
     {
         using var error = new NativeErrorBuffer();

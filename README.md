@@ -31,7 +31,7 @@ dotnet run --project src/AudioCpp.NET.Console -- models download <id> --models-d
 ## Pinned upstream
 
 - Repository: `https://github.com/0xShug0/audio.cpp`
-- Commit: `78d47706c30ef215ba9ad3559baff309efeb5260`
+- Commit: `f825d1d1b92af309585aeb656b2a59c44fc603eb` (`v0.8.2-audio8-perf-hotfix-28-gf825d1d1`)
 - Lock file: [`eng/upstream.lock.json`](eng/upstream.lock.json)
 - License: Apache-2.0 (Copyright 2026 ShugoAI LLC) — see [`NOTICE`](NOTICE)
 
@@ -123,7 +123,7 @@ The shim exposes upstream's `IStreamingVoiceTaskSession` through four additive
 ABI exports (`audiocpp_stream_open`, `audiocpp_stream_push_pcm`,
 `audiocpp_stream_finish`, `audiocpp_stream_free`; `stream_open_ex` additionally
 accepts inline text, style and input artifacts), advertises
-`AUDIOCPP_CAP_STREAMING`, and reports ABI minor 3. `stream_open` rejects models
+`AUDIOCPP_CAP_STREAMING`, and reports ABI minor 4. `stream_open` rejects models
 whose loader does not list a `streaming` mode for the requested task, so offline
 models fail fast with `model does not support streaming for the requested task`.
 
@@ -164,7 +164,8 @@ reference. Two additional subcommands exercise the full ABI surface:
 
 - `tasks --native PATH` prints the native task catalog: every canonical token
   (`vad/asr/diar/sep/gen/tts/clon/vc/s2s/align/vdes/spk/svc/midi`) plus the
-  model-spec aliases (`audio_generation/music/sfx/edit/clone/design/speaker/codec`)
+  model-spec aliases (`audio_generation/music/sfx/edit/clone/design/speaker`,
+  resolved through upstream's task vocabulary since pin f825d1d1)
   with their input shape, typical outputs and aliases.
 - `run --model DIR --task TOKEN [--input WAV | --text TEXT] [--text-language LANG]
   [--artifact kind:hex|kind:path ...] [--style-language LANG] [--emotion E]

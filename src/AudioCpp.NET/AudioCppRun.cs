@@ -33,7 +33,9 @@ public static class AudioCppTaskKinds
         SpeechToSpeech, Alignment, VoiceDesign, SpeakerRecognition, Svc, Midi,
     };
 
-    /// <summary>model_spec/*.json "tasks" tokens that are not canonical.</summary>
+    /// <summary>model_spec/*.json "tasks" tokens that are not canonical. Mirrors
+    /// upstream's task vocabulary (engine/framework/runtime/task_vocabulary.h);
+    /// the shim forwards token resolution to that table since pin f825d1d1.</summary>
     public static IReadOnlyDictionary<string, string> Aliases { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["audio_generation"] = AudioGeneration,
@@ -43,7 +45,6 @@ public static class AudioCppTaskKinds
         ["clone"] = VoiceCloning,
         ["design"] = VoiceDesign,
         ["speaker"] = SpeakerRecognition,
-        ["codec"] = VoiceConversion,
     };
 
     /// <summary>Resolves a canonical token or an alias to its canonical form.</summary>
@@ -87,26 +88,30 @@ public sealed record AudioCppStyle
     public IReadOnlyDictionary<string, string>? Tags { get; init; }
 }
 
-/// <summary>
-/// One structured run against any task the loaded model supports. Every field is
-/// optional: an audio-only request defaults to <c>asr</c> and a text-only request
-/// to <c>tts</c>, matching the native shim's inference rule.
-/// </summary>
-public sealed record AudioCppRunRequest
-{
-    public string? Task { get; init; }
-    public string? Text { get; init; }
-    public string? TextLanguage { get; init; }
-    public ReadOnlyMemory<float> Audio { get; init; }
-    public int SampleRate { get; init; }
-    public int Channels { get; init; } = 1;
-    public string? VoiceId { get; init; }
-    public ReadOnlyMemory<float> ReferencePcm { get; init; }
-    public int ReferenceSampleRate { get; init; }
-    public AudioCppStyle? Style { get; init; }
-    public IReadOnlyList<AudioCppInputArtifact>? Artifacts { get; init; }
-    public IReadOnlyDictionary<string, string>? Options { get; init; }
-}
+    /// <summary>One structured run against any task the loaded model supports. Every field is
+    /// optional: an audio-only request defaults to <c>asr</c> and a text-only request
+    /// to <c>tts</c>, matching the native shim's inference rule.
+    /// </summary>
+    public sealed record AudioCppRunRequest
+    {
+        public string? Task { get; init; }
+        public string? Text { get; init; }
+        public string? TextLanguage { get; init; }
+        public ReadOnlyMemory<float> Audio { get; init; }
+        public int SampleRate { get; init; }
+        public int Channels { get; init; } = 1;
+        public string? VoiceId { get; init; }
+        public ReadOnlyMemory<float> ReferencePcm { get; init; }
+        public int ReferenceSampleRate { get; init; }
+        public AudioCppStyle? Style { get; init; }
+        public IReadOnlyList<AudioCppInputArtifact>? Artifacts { get; init; }
+        public IReadOnlyDictionary<string, string>? Options { get; init; }
+        /// <summary>List-valued options (upstream *_list spec options, e.g. kokoro_tts
+        /// phonemes). Serialized into the same options JSON as <see cref="Options"/>,
+        /// as JSON arrays; requires the shim's AUDIOCPP_CAP_OPTION_ARRAYS capability
+        /// (ABI 1.4+). Only honored by run/stream entry points, not model-load options.</summary>
+        public IReadOnlyDictionary<string, IReadOnlyList<string>>? OptionArrays { get; init; }
+    }
 
 /// <summary>Compiled-in copy of the native task catalog, used when the loaded
 /// shim does not advertise <see cref="AudioCppCapabilities.TaskCatalog"/>.</summary>
@@ -121,7 +126,7 @@ internal static class AudioCppTaskCatalog
         new AudioCppTaskInfo(AudioCppTaskKinds.AudioGeneration, "text", ["audio_output", "named_audio_outputs"], ["audio_generation", "music", "sfx", "edit"]),
         new AudioCppTaskInfo(AudioCppTaskKinds.Tts, "text", ["audio_output", "named_audio_outputs"], []),
         new AudioCppTaskInfo(AudioCppTaskKinds.VoiceCloning, "text", ["audio_output", "named_audio_outputs"], ["clone"]),
-        new AudioCppTaskInfo(AudioCppTaskKinds.VoiceConversion, "audio+text", ["audio_output", "named_audio_outputs"], ["codec"]),
+        new AudioCppTaskInfo(AudioCppTaskKinds.VoiceConversion, "audio+text", ["audio_output", "named_audio_outputs"], []),
         new AudioCppTaskInfo(AudioCppTaskKinds.SpeechToSpeech, "audio+text", ["audio_output", "named_audio_outputs"], []),
         new AudioCppTaskInfo(AudioCppTaskKinds.Alignment, "audio+text", ["word_timestamps"], []),
         new AudioCppTaskInfo(AudioCppTaskKinds.VoiceDesign, "text", ["audio_output"], ["design"]),
@@ -145,6 +150,30 @@ public static class AudioCppRunRequests
         if (style.EnergyScale is not null) merged["energy_scale"] = Number(style.EnergyScale.Value);
         if (style.Tags is not null) foreach (var tag in style.Tags) merged[$"style_tag_{tag.Key}"] = tag.Value;
         return merged;
+    }
+
+    /// <summary>Serializes scalar + list-valued options into one options JSON the
+    /// native parser understands: string values become scalars, list values become
+    /// JSON arrays (routed to TaskRequest::option_arrays). Null when nothing is set.</summary>
+    internal static string? SerializeOptions(
+        AudioCppStyle? style,
+        IReadOnlyDictionary<string, string>? options,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>? optionArrays)
+    {
+        var scalars = BuildOptions(style, options);
+        if ((scalars.Count == 0) && (optionArrays is null || optionArrays.Count == 0)) return null;
+        var payload = new Dictionary<string, object?>(scalars.Count + (optionArrays?.Count ?? 0));
+        foreach (var entry in scalars) payload[entry.Key] = entry.Value;
+        if (optionArrays is not null)
+        {
+            foreach (var entry in optionArrays)
+            {
+                if (entry.Value is null || entry.Value.Count == 0)
+                    throw new ArgumentException($"Option array '{entry.Key}' must not be empty.", nameof(optionArrays));
+                payload[entry.Key] = entry.Value;
+            }
+        }
+        return JsonSerializer.Serialize(payload, SerializerOptions);
     }
 
     internal static string? SerializeArtifacts(IReadOnlyList<AudioCppInputArtifact>? artifacts)
@@ -198,5 +227,5 @@ public static class AudioCppRunRequests
 
     private static string Number(float value) => value.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    private static readonly JsonSerializerOptions SerializerOptions = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
+    internal static readonly JsonSerializerOptions SerializerOptions = new() { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
 }

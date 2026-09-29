@@ -6,7 +6,7 @@
 - 项目目录：`D:\SouceCode\python2net\audio\audiocpp-dotnet`
 - 参考项目：`D:\SouceCode\python2net\audio\audiocpp-go`
 - 上游源码：`D:\SouceCode\python2net\audio\audio.cpp`
-- 固定上游提交：`78d47706c30ef215ba9ad3559baff309efeb5260`
+- 固定上游提交：`f825d1d1b92af309585aeb656b2a59c44fc603eb`
 - 上游远端：`https://github.com/0xShug0/audio.cpp`
 - 目标框架：`.NET 10 (net10.0)`
 - 初始 shim ABI：`1.0`

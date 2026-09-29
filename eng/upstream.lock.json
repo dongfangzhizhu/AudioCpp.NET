@@ -1,14 +1,14 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/0xShug0/audio.cpp",
-  "commit": "78d47706c30ef215ba9ad3559baff309efeb5260",
-  "shortCommit": "78d47706c30e",
+  "commit": "f825d1d1b92af309585aeb656b2a59c44fc603eb",
+  "shortCommit": "f825d1d1b92a",
   "branchAtPin": "main",
-  "describeAtPin": "last-docker-build-8-g78d4770",
-  "pinnedAtUtc": "2026-09-11T00:00:00Z",
+  "describeAtPin": "v0.8.2-audio8-perf-hotfix-28-gf825d1d1",
+  "pinnedAtUtc": "2026-09-29T00:00:00Z",
   "shimAbi": {
     "major": 1,
-    "minor": 3
+    "minor": 4
   },
   "build": {
     "deploymentBuild": true,
@@ -16,9 +16,9 @@
     "defaultModelSet": "full",
     "defaultModels": [],
     "modelSetOptions": ["full", "core", "custom"],
-    "modelFamilies": 74,
+    "modelFamilies": 101,
     "modelManagerDefault": "on",
     "portableCpu": true,
-    "notes": "Values verified against a full-set build on 2026-09-16: 74 model_specs families produced 74 linked loaders and 76 catalog entries (74 + 2 built-in VADs), ABI 1.3, capabilities 0xFF. 'core' selects the engine with no model loaders and is what the CI ABI gate builds."
+    "notes": "Values at pin f825d1d1 (v0.8.2-audio8-perf-hotfix-28): 101 model_specs families. ABI 1.4 adds the batched run entry point (audiocpp_model_run_json_batch, AUDIOCPP_CAP_BATCH) and list-valued run options routed to TaskRequest::option_arrays (AUDIOCPP_CAP_OPTION_ARRAYS); task token/alias resolution is delegated to upstream's public task vocabulary (task_vocabulary.h, #544), which removed the fake 'codec' alias. Loader/catalog counts for the full-set build are re-verified at release time."
   }
 }

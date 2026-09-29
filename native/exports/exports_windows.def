@@ -8,6 +8,7 @@ EXPORTS
   audiocpp_model_transcribe
   audiocpp_model_run_json
   audiocpp_model_run_json_ex
+  audiocpp_model_run_json_batch
   audiocpp_get_loader_catalog
   audiocpp_get_task_catalog
   audiocpp_get_package_catalog
