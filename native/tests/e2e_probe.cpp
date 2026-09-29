@@ -343,18 +343,60 @@ static std::vector<std::string> narrow_utf8(const int argc, wchar_t ** wargv) {
 }
 #endif
 
+// --- mode: batch --------------------------------------------------------------
+
+// Batched ASR probe (new in ABI 1.4): the same WAV is handed to
+// audiocpp_model_run_json_batch as N requests sharing one interleaved audio
+// pool, and every result must come back with a transcript and the batch task
+// echo. Exercises the native batch path (or the sequential fallback, whichever
+// the loaded model implements) end to end.
+int run_batch(const Args & args) {
+    WavData wav;
+    std::string error;
+    if (!load_wav(args.positional, wav, error)) { std::cerr << "e2e: " << error << '\n'; return 2; }
+    char err[512] = {};
+    audiocpp_model * model = load(args, err, sizeof(err));
+    if (model == nullptr) { std::cerr << "e2e: load failed: " << err << '\n'; return 3; }
+
+    constexpr int32_t kRequests = 3;
+    std::string requests = "[";
+    for (int32_t i = 0; i < kRequests; ++i) {
+        if (i != 0) requests += ',';
+        requests += "{\"audio\":{\"offset\":" + std::to_string(i * static_cast<int64_t>(wav.samples.size())) +
+            ",\"count\":" + std::to_string(wav.samples.size()) + "}}";
+    }
+    requests += "]";
+
+    char * json = nullptr;
+    const int status = audiocpp_model_run_json_batch(model, "asr", requests.c_str(),
+        wav.samples.data(), int32_t(wav.samples.size()) * kRequests,
+        wav.sample_rate, wav.channels, &json, err, sizeof(err));
+    audiocpp_model_free(model);
+    if (status != AUDIOCPP_OK) { std::cerr << "e2e: batch failed: " << err << '\n'; return 4; }
+    const std::string result = json ? json : "";
+    audiocpp_buffer_free(json);
+    const int results = count_key(result, "\"text_output\"");
+    const int task_echo = count_key(result, "\"task\":\"asr\"");
+    std::cout << "e2e: batch bytes=" << result.size() << " results=" << results
+              << " task_echo=" << task_echo << '\n';
+    if (results < kRequests) { std::cerr << "e2e: batch returned too few results\n"; return 5; }
+    return 0;
+}
+
 static int run(const int argc, char ** argv) {
     if (argc < 3) {
         std::cerr << "usage:\n"
                   << "  audiocpp_dotnet_e2e asr MODEL WAV [--family F] [--backend B] [--threads N]\n"
                   << "  audiocpp_dotnet_e2e tts MODEL TEXT OUT.wav [--voice-ref WAV] [--ref-text TEXT] [--max-tokens N] [--family F] [--backend B] [--threads N]\n"
-                  << "  audiocpp_dotnet_e2e vad MODEL WAV [--family F] [--backend B] [--threads N]\n";
+                  << "  audiocpp_dotnet_e2e vad MODEL WAV [--family F] [--backend B] [--threads N]\n"
+                  << "  audiocpp_dotnet_e2e batch MODEL WAV [--family F] [--backend B] [--threads N]\n";
         return 2;
     }
     const Args args = parse(argc, argv);
     if (args.mode == "asr") return run_asr(args);
     if (args.mode == "tts") return run_tts(args);
     if (args.mode == "vad") return run_vad(args);
+    if (args.mode == "batch") return run_batch(args);
     std::cerr << "e2e: unknown mode " << args.mode << '\n';
     return 2;
 }

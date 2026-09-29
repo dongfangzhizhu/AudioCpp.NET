@@ -45,6 +45,15 @@ enum {
     /* audiocpp_model_run_json_ex / audiocpp_stream_open_ex accept text_language
      * and artifacts_json. */
     AUDIOCPP_CAP_EXEC_OPTIONS = 1ull << 7,
+    /* audiocpp_model_run_json_batch is available: several requests are handed to
+     * the model in one call. Models that implement upstream's
+     * IBatchedOfflineVoiceTaskSession run natively batched; the others fall back
+     * to sequential offline runs with identical results. */
+    AUDIOCPP_CAP_BATCH = 1ull << 8,
+    /* options_json accepts list-valued entries: {"key":["a","b"]} is routed to
+     * TaskRequest::option_arrays (upstream's *_list spec options, e.g. kokoro_tts
+     * phonemes). Scalar entries keep the previous behavior. */
+    AUDIOCPP_CAP_OPTION_ARRAYS = 1ull << 9,
 };
 
 /*
@@ -140,6 +149,36 @@ AUDIOCPP_API int32_t audiocpp_model_run_json_ex(
     int32_t audio_channels, const char * voice_id, const float * ref_pcm,
     int32_t ref_count, int32_t ref_sample_rate, const char * artifacts_json,
     const char * options_json, char ** out_json, char * err, size_t errlen);
+/*
+ * Batched structured execution of one task family over several requests.
+ *
+ * `requests_json` is a JSON array; each element describes one request:
+ *   {"text":"...", "text_language":"...", "voice_id":"...",
+ *    "audio":{"offset":0,"count":16000},
+ *    "artifacts":[ ...same schema as audiocpp_model_run_json_ex... ],
+ *    "options":{ ...scalar and list-valued, same rules as options_json... }}
+ *
+ * `audio_samples` is one shared interleaved buffer for every request:
+ * element i reads audio_samples[audio.offset .. audio.offset+audio.count).
+ * Every request uses the same sample rate and channel count, so batched ASR of
+ * N clips costs one marshalled buffer instead of N calls. `offset` counts
+ * interleaved samples from the buffer start and must stay inside it.
+ *
+ * When `task` is null/empty it is inferred per request like run_json_ex:
+ * requests with audio become asr, the others tts.
+ *
+ * `out_json` is {"schema_version":2,"task":"<canonical token>","results":[
+ * <task_result>, ...]} with one result per request, in order. Requires
+ * AUDIOCPP_CAP_BATCH. Models implementing upstream's batched offline session
+ * run natively batched; the rest are executed sequentially through the plain
+ * offline session, so results match run_json_ex one-by-one.
+ */
+AUDIOCPP_API int32_t audiocpp_model_run_json_batch(
+    audiocpp_model * model, const char * task,
+    const char * requests_json,
+    const float * audio_samples, int32_t audio_pool_count,
+    int32_t audio_sample_rate, int32_t audio_channels,
+    char ** out_json, char * err, size_t errlen);
 AUDIOCPP_API int32_t audiocpp_get_package_catalog(char ** out_json, char * err, size_t errlen);
 AUDIOCPP_API int32_t audiocpp_install_package(
     const char * package_id,

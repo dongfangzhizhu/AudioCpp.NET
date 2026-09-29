@@ -115,6 +115,10 @@ public static class AudioCppCapabilities
     public const ulong TaskCatalog = 1UL << 5;
     public const ulong Artifacts = 1UL << 6;
     public const ulong ExecOptions = 1UL << 7;
+    /// <summary>audiocpp_model_run_json_batch is available (ABI 1.4+).</summary>
+    public const ulong Batch = 1UL << 8;
+    /// <summary>List-valued options (AudioCppRunRequest.OptionArrays) are honored (ABI 1.4+).</summary>
+    public const ulong OptionArrays = 1UL << 9;
 }
 public sealed record AudioCppLoader(string Family, string InstructionsPolicy, IReadOnlyList<string> ApiEndpoints,
     IReadOnlyList<AudioCppLoaderTask> Tasks, IReadOnlyList<string> Languages,
@@ -364,13 +368,121 @@ public sealed class AudioCppModel : IDisposable
             request.ReferencePcm,
             request.ReferenceSampleRate,
             AudioCppRunRequests.SerializeArtifacts(request.Artifacts),
-            AudioCppRuntime.ToJson(AudioCppRunRequests.BuildOptions(request.Style, request.Options)));
+            AudioCppRunRequests.SerializeOptions(request.Style, request.Options, request.OptionArrays));
         string json;
         try { json = InteropOperations.RunJson(_handle, input); }
         catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
         { throw new AudioCppInferenceException(exception.Message, exception); }
         using var document = JsonDocument.Parse(json);
         return new AudioCppTaskResult(document.RootElement.Clone());
+    }
+
+    /// <summary>
+    /// Batched structured run (requires <see cref="AudioCppCapabilities.Batch"/>, ABI 1.4+).
+    /// All requests go to one task family in a single native call: models implementing
+    /// upstream's batched offline session run natively batched, the rest execute
+    /// sequentially with identical results. Every request's audio is copied into one
+    /// shared pool, so all audio requests must share one sample rate and channel count.
+    /// Voice references (<see cref="AudioCppRunRequest.ReferencePcm"/>) are not supported
+    /// in batches; use <see cref="AudioCppModel.Run(AudioCppRunRequest)"/> for those.
+    /// </summary>
+    /// <param name="requests">One or more requests.</param>
+    /// <param name="task">Optional explicit task token. Task resolution: the explicit
+    /// <paramref name="task"/> token wins; otherwise every request's Task field must
+    /// agree after normalization; otherwise audio-only batches become <c>asr</c> and
+    /// text-only batches <c>tts</c>. Mixed audio/text batches need an explicit task.</param>
+    public IReadOnlyList<AudioCppTaskResult> RunBatch(IReadOnlyList<AudioCppRunRequest> requests, string? task = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(requests);
+        if (requests.Count == 0) throw new ArgumentException("At least one request is required.", nameof(requests));
+        if ((_capabilities & AudioCppCapabilities.Batch) == 0)
+            throw new NotSupportedException(
+                "The loaded native shim does not advertise AUDIOCPP_CAP_BATCH; rebuild the shim (ABI 1.4+) to use RunBatch.");
+        foreach (var request in requests)
+        {
+            AudioCppRunRequests.Validate(request);
+            if (!request.ReferencePcm.IsEmpty)
+                throw new NotSupportedException("ReferencePcm is not supported in batches; run such requests individually.");
+        }
+
+        // Task resolution: explicit argument > unanimous per-request Task > shape
+        // inference. Requests that declare different task tokens are refused: a
+        // batch is one task family, and silently running a declared "clon" as the
+        // shape-inferred "tts" would be wrong.
+        string? resolved = AudioCppTaskKinds.Normalize(task);
+        if (resolved is null)
+        {
+            var declared = requests
+                .Select(request => AudioCppTaskKinds.Normalize(request.Task))
+                .Where(normalized => normalized is not null)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (declared.Length > 1)
+                throw new ArgumentException(
+                    $"Requests declare different tasks ({string.Join(", ", declared)}); run them separately or pass an explicit task token.",
+                    nameof(requests));
+            if (declared.Length == 1) resolved = declared[0];
+        }
+        var hasAudio = requests.Any(request => !request.Audio.IsEmpty);
+        var allAudio = requests.All(request => !request.Audio.IsEmpty);
+        if (resolved is null)
+        {
+            if (hasAudio != allAudio)
+                throw new ArgumentException(
+                    "Mixed batch: some requests carry audio and some do not. Pass an explicit task token.", nameof(requests));
+            resolved = hasAudio ? AudioCppTaskKinds.Asr : AudioCppTaskKinds.Tts;
+        }
+
+        // One shared interleaved audio pool; per-request entries index into it.
+        var pool = new List<float>(requests.Sum(request => request.Audio.Length));
+        var entries = new List<Dictionary<string, object?>>(requests.Count);
+        int? poolSampleRate = null;
+        int? poolChannels = null;
+        foreach (var request in requests)
+        {
+            var entry = new Dictionary<string, object?>();
+            if (!string.IsNullOrWhiteSpace(request.Text)) entry["text"] = request.Text;
+            if (!string.IsNullOrWhiteSpace(request.TextLanguage)) entry["text_language"] = request.TextLanguage;
+            if (!string.IsNullOrWhiteSpace(request.VoiceId)) entry["voice_id"] = request.VoiceId;
+            if (!request.Audio.IsEmpty)
+            {
+                if (request.SampleRate <= 0 || request.Channels <= 0)
+                    throw new ArgumentException("SampleRate and Channels must be positive when Audio is supplied.", nameof(requests));
+                if (poolSampleRate is null) { poolSampleRate = request.SampleRate; poolChannels = request.Channels; }
+                else if (poolSampleRate != request.SampleRate || poolChannels != request.Channels)
+                    throw new ArgumentException(
+                        "All audio in one batch must share one sample rate and channel count " +
+                        $"(first request: {poolSampleRate} Hz x {poolChannels} ch, this request: {request.SampleRate} Hz x {request.Channels} ch).",
+                        nameof(requests));
+                entry["audio"] = new Dictionary<string, object?> { ["offset"] = pool.Count, ["count"] = request.Audio.Length };
+                pool.AddRange(request.Audio.ToArray());
+            }
+            var artifacts = AudioCppRunRequests.SerializeArtifacts(request.Artifacts);
+            if (artifacts is not null) entry["artifacts"] = JsonSerializer.Deserialize<JsonElement>(artifacts);
+            var options = AudioCppRunRequests.SerializeOptions(request.Style, request.Options, request.OptionArrays);
+            if (options is not null) entry["options"] = JsonSerializer.Deserialize<JsonElement>(options);
+            entries.Add(entry);
+        }
+
+        string json;
+        try
+        {
+            json = InteropOperations.RunJsonBatch(_handle, resolved,
+                JsonSerializer.Serialize(entries, AudioCppRunRequests.SerializerOptions),
+                pool.ToArray(), poolSampleRate ?? 0, poolChannels ?? 0);
+        }
+        catch (Exception exception) when (exception.GetType().Name == "NativeCallException")
+        { throw new AudioCppInferenceException(exception.Message, exception); }
+
+        using var document = JsonDocument.Parse(json);
+        var results = new List<AudioCppTaskResult>(requests.Count);
+        foreach (var item in AudioCppTaskResult.Array(document.RootElement.Clone(), "results"))
+            results.Add(new AudioCppTaskResult(item));
+        if (results.Count != requests.Count)
+            throw new AudioCppInferenceException(
+                $"Native batch returned {results.Count} results for {requests.Count} requests.");
+        return results;
     }
 
     public AudioBuffer Synthesize(TtsRequest request)

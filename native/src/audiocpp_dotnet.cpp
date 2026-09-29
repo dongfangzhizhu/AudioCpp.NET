@@ -5,11 +5,13 @@
 #include "engine/framework/io/json.h"
 #include "engine/framework/runtime/registry.h"
 #include "engine/framework/runtime/session.h"
+#include "engine/framework/runtime/task_vocabulary.h"
 #if defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
 #include "engine/framework/package_manager/manager.h"
 #endif
 
 #include <cctype>
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -25,7 +27,7 @@
 #include <vector>
 
 namespace {
-constexpr const char * kCommit = "78d47706c30ef215ba9ad3559baff309efeb5260";
+constexpr const char * kCommit = "f825d1d1b92af309585aeb656b2a59c44fc603eb";
 #ifdef AUDIOCPP_DOTNET_BACKEND
 constexpr const char * kBackend = AUDIOCPP_DOTNET_BACKEND;
 #else
@@ -68,50 +70,43 @@ char * copy_string(const std::string & value) {
 
 // ---- task tokens -----------------------------------------------------------------
 //
-// audiocpp_model_run_json/stream_open accept the canonical tokens used by
-// runtime::to_string(VoiceTaskKind) *and* the tokens that appear in
-// upstream's model_specs/*.json "tasks" arrays. Upstream keeps that second table
-// private to src/framework/model_spec/metadata.cpp, so the mapping is mirrored
-// here; audiocpp_get_task_catalog publishes it back to callers.
-struct TaskAlias {
-    const char * token;
-    engine::runtime::VoiceTaskKind kind;
-};
-
-constexpr TaskAlias kTaskAliases[] = {
-    {"audio_generation", engine::runtime::VoiceTaskKind::AudioGeneration},
-    {"music", engine::runtime::VoiceTaskKind::AudioGeneration},
-    {"sfx", engine::runtime::VoiceTaskKind::AudioGeneration},
-    {"edit", engine::runtime::VoiceTaskKind::AudioGeneration},
-    {"clone", engine::runtime::VoiceTaskKind::VoiceCloning},
-    {"design", engine::runtime::VoiceTaskKind::VoiceDesign},
-    {"speaker", engine::runtime::VoiceTaskKind::SpeakerRecognition},
-    {"codec", engine::runtime::VoiceTaskKind::VoiceConversion},
-};
-
+// audiocpp_model_run_json/stream_open accept the canonical tokens returned by
+// runtime::to_string(VoiceTaskKind) *and* the spec-side spellings declared by
+// upstream's task vocabulary (engine/framework/runtime/task_vocabulary.h, added
+// upstream-side in #544). The shim used to mirror that mapping by hand and it
+// drifted (the fake "codec" alias existed here but not upstream); the pin at
+// f825d1d1 exposes the vocabulary as a public API, so the tables below only
+// carry the descriptions audiocpp_get_task_catalog adds on top (input shape and
+// typical result channels). Tokens and aliases always come from upstream.
 struct TaskDescriptor {
     engine::runtime::VoiceTaskKind kind;
-    const char * token;
     const char * input;            // audio | text | audio+text
     const char * typical_outputs;  // comma-separated TaskResult channels
 };
 
 constexpr TaskDescriptor kTaskCatalog[] = {
-    {engine::runtime::VoiceTaskKind::Vad, "vad", "audio", "speech_segments"},
-    {engine::runtime::VoiceTaskKind::Asr, "asr", "audio", "text_output,word_timestamps,speech_segments"},
-    {engine::runtime::VoiceTaskKind::Diarization, "diar", "audio", "speaker_turns"},
-    {engine::runtime::VoiceTaskKind::SourceSeparation, "sep", "audio", "named_audio_outputs"},
-    {engine::runtime::VoiceTaskKind::AudioGeneration, "gen", "text", "audio_output,named_audio_outputs"},
-    {engine::runtime::VoiceTaskKind::Tts, "tts", "text", "audio_output,named_audio_outputs"},
-    {engine::runtime::VoiceTaskKind::VoiceCloning, "clon", "text", "audio_output,named_audio_outputs"},
-    {engine::runtime::VoiceTaskKind::VoiceConversion, "vc", "audio+text", "audio_output,named_audio_outputs"},
-    {engine::runtime::VoiceTaskKind::SpeechToSpeech, "s2s", "audio+text", "audio_output,named_audio_outputs"},
-    {engine::runtime::VoiceTaskKind::Alignment, "align", "audio+text", "word_timestamps"},
-    {engine::runtime::VoiceTaskKind::VoiceDesign, "vdes", "text", "audio_output"},
-    {engine::runtime::VoiceTaskKind::SpeakerRecognition, "spk", "audio", "artifact_output"},
-    {engine::runtime::VoiceTaskKind::Svc, "svc", "audio+text", "audio_output"},
-    {engine::runtime::VoiceTaskKind::Midi, "midi", "audio", "artifact_output"},
+    {engine::runtime::VoiceTaskKind::Vad, "audio", "speech_segments"},
+    {engine::runtime::VoiceTaskKind::Asr, "audio", "text_output,word_timestamps,speech_segments"},
+    {engine::runtime::VoiceTaskKind::Diarization, "audio", "speaker_turns"},
+    {engine::runtime::VoiceTaskKind::SourceSeparation, "audio", "named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::AudioGeneration, "text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::Tts, "text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::VoiceCloning, "text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::VoiceConversion, "audio+text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::SpeechToSpeech, "audio+text", "audio_output,named_audio_outputs"},
+    {engine::runtime::VoiceTaskKind::Alignment, "audio+text", "word_timestamps"},
+    {engine::runtime::VoiceTaskKind::VoiceDesign, "text", "audio_output"},
+    {engine::runtime::VoiceTaskKind::SpeakerRecognition, "audio", "artifact_output"},
+    {engine::runtime::VoiceTaskKind::Svc, "audio+text", "audio_output"},
+    {engine::runtime::VoiceTaskKind::Midi, "audio", "artifact_output"},
 };
+
+const TaskDescriptor * task_descriptor(engine::runtime::VoiceTaskKind kind) {
+    for (const auto & entry : kTaskCatalog) {
+        if (entry.kind == kind) return &entry;
+    }
+    return nullptr;
+}
 
 std::string lowercase(std::string value) {
     for (char & ch : value) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -119,34 +114,42 @@ std::string lowercase(std::string value) {
 }
 
 // Throws std::invalid_argument with the full accepted-token list so callers get
-// an actionable message instead of a bare "unsupported task".
+// an actionable message instead of a bare "unsupported task". Canonical tokens
+// and spec aliases are both resolved through upstream's task vocabulary, so a
+// token accepted by the engine's own parser is accepted here.
 engine::runtime::VoiceTaskKind parse_task_kind(const char * value) {
-    std::string token = lowercase(value == nullptr ? std::string() : std::string(value));
+    const std::string token = lowercase(value == nullptr ? std::string() : std::string(value));
     if (token.empty()) throw std::invalid_argument("task must not be empty");
-    for (const auto & entry : kTaskCatalog) {
-        if (token == entry.token) return entry.kind;
-    }
-    for (const auto & entry : kTaskAliases) {
-        if (token != entry.token) continue;
-        // "codec" is advertised by miocodec's spec but upstream has no codec
-        // kind; the model's own vc/s2s sessions are the supported path.
-        return entry.kind;
+    // Canonical spelling first, then the spec-side aliases ("music" -> "gen").
+    if (const auto canonical = engine::runtime::task_token_for_spec_name(token); !canonical.empty()) {
+        return engine::runtime::parse_voice_task_kind(std::string(canonical));
     }
     std::string accepted;
-    for (const auto & entry : kTaskCatalog) { if (!accepted.empty()) accepted += ", "; accepted += entry.token; }
-    for (const auto & entry : kTaskAliases) { accepted += ", "; accepted += entry.token; }
+    std::size_t count = 0;
+    const auto * vocabulary = engine::runtime::task_vocabulary(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!accepted.empty()) accepted += ", ";
+        accepted += vocabulary[i].token;
+        for (std::size_t a = 0; a < vocabulary[i].alias_count; ++a) {
+            accepted += ", ";
+            accepted += vocabulary[i].aliases[a];
+        }
+    }
     throw std::invalid_argument("unsupported task: " + token + " (expected one of " + accepted + ")");
 }
 
 std::string task_catalog_json() {
+    std::size_t count = 0;
+    const auto * vocabulary = engine::runtime::task_vocabulary(count);
     std::ostringstream output;
     output << "{\"schema_version\":" << AUDIOCPP_TASK_CATALOG_SCHEMA_VERSION << ",\"tasks\":[";
-    for (size_t i = 0; i < sizeof(kTaskCatalog) / sizeof(kTaskCatalog[0]); ++i) {
+    for (std::size_t i = 0; i < count; ++i) {
         if (i != 0) output << ',';
-        const auto & entry = kTaskCatalog[i];
-        output << "{\"task\":\"" << json_escape(entry.token) << "\",\"input\":\"" << entry.input
-               << "\",\"typical_outputs\":[\"";
-        const std::string channels(entry.typical_outputs);
+        const auto & entry = vocabulary[i];
+        const auto * descriptor = task_descriptor(entry.kind);
+        output << "{\"task\":\"" << json_escape(std::string(entry.token)) << "\",\"input\":\""
+               << (descriptor != nullptr ? descriptor->input : "audio") << "\",\"typical_outputs\":[\"";
+        const std::string channels(descriptor != nullptr ? descriptor->typical_outputs : "");
         size_t start = 0;
         bool first_channel = true;
         while (start <= channels.size()) {
@@ -159,12 +162,9 @@ std::string task_catalog_json() {
             start = comma + 1;
         }
         output << "\"],\"aliases\":[";
-        bool first_alias = true;
-        for (const auto & alias : kTaskAliases) {
-            if (alias.kind != entry.kind) continue;
-            if (!first_alias) output << ',';
-            first_alias = false;
-            output << "\"" << alias.token << "\"";
+        for (std::size_t a = 0; a < entry.alias_count; ++a) {
+            if (a != 0) output << ',';
+            output << "\"" << json_escape(std::string(entry.aliases[a])) << "\"";
         }
         output << "]}";
     }
@@ -221,9 +221,16 @@ engine::core::BackendType parse_backend(const char * value) {
     throw std::invalid_argument("unsupported backend: " + backend);
 }
 
-void parse_options(const char * json, std::unordered_map<std::string, std::string> & result) {
-    // Options stay a flat scalar map: every runtime option upstream defines is a
-    // scalar, and nested model configuration travels through load_options_json.
+// Options stay a flat map, with one addition since upstream #566: a value that
+// is a JSON array of strings is routed to `arrays` (TaskRequest::option_arrays,
+// the *_list options a model_spec may declare, e.g. kokoro_tts phonemes). When
+// `arrays` is null (model-load options) array values are rejected, because
+// ModelLoadRequest::options upstream is scalar-only. Nested model configuration
+// still travels through load_options_json.
+void parse_options(
+    const char * json,
+    std::unordered_map<std::string, std::string> & result,
+    std::unordered_map<std::string, std::vector<std::string>> * arrays) {
     if (json == nullptr || *json == '\0') return;
     const std::string input(json);
     size_t i = input.find('{');
@@ -239,6 +246,27 @@ void parse_options(const char * json, std::unordered_map<std::string, std::strin
         i = input.find(':', key_end);
         if (i == std::string::npos) throw std::invalid_argument("invalid options_json object");
         while (++i < input.size() && (input[i] == ' ' || input[i] == '\n' || input[i] == '\r' || input[i] == '\t')) {}
+        if (i < input.size() && input[i] == '[') {
+            // List-valued option: every element must be a string.
+            std::vector<std::string> values;
+            while (++i < input.size()) {
+                while (i < input.size() && (input[i] == ' ' || input[i] == '\n' || input[i] == '\r' || input[i] == '\t' || input[i] == ',')) ++i;
+                if (i >= input.size()) throw std::invalid_argument("unterminated options_json array value");
+                if (input[i] == ']') break;
+                if (input[i] != '"') throw std::invalid_argument("options_json array values must be strings");
+                const size_t value_start = ++i;
+                const size_t value_end = input.find('"', value_start);
+                if (value_end == std::string::npos) throw std::invalid_argument("unterminated options_json array value");
+                values.push_back(input.substr(value_start, value_end - value_start));
+                i = value_end;
+            }
+            if (i >= input.size()) throw std::invalid_argument("unterminated options_json array value");
+            if (arrays == nullptr)
+                throw std::invalid_argument(
+                    "array-valued option '" + key + "' is not accepted here; list options only apply to run/stream options");
+            (*arrays)[key] = std::move(values);
+            continue;
+        }
         std::string value;
         if (i < input.size() && input[i] == '"') {
             const size_t value_start = ++i;
@@ -560,8 +588,56 @@ void fill_request(
         request.voice->speaker->audio = std::move(reference);
     }
     request.input_artifacts = parse_artifacts(artifacts_json);
-    parse_options(options_json, request.options);
+    parse_options(options_json, request.options, &request.option_arrays);
     apply_style_condition(request);
+}
+
+// One element of requests_json. `audio_offset`/`audio_count` index the shared
+// interleaved buffer the caller handed in; `has_audio` distinguishes "no audio
+// key" from "audio with zero samples", which the task inference needs. Lives in
+// this anonymous namespace (not inside the extern "C" block): MSVC leaks the C
+// language linkage into functions declared there and then rejects the
+// std::vector return type.
+struct BatchRequest {
+    std::string text;
+    std::string text_language;
+    std::string voice_id;
+    std::string artifacts_json;
+    std::string options_json;
+    int64_t audio_offset = 0;
+    int32_t audio_count = 0;
+    bool has_audio = false;
+};
+
+std::vector<BatchRequest> parse_batch_requests(const char * json) {
+    if (json == nullptr || *json == '\0') throw std::invalid_argument("requests_json must be a JSON array");
+    const auto root = engine::io::json::parse(json);
+    if (!root.is_array() || root.as_array().empty())
+        throw std::invalid_argument("requests_json must be a non-empty JSON array");
+    std::vector<BatchRequest> requests;
+    requests.reserve(root.as_array().size());
+    for (const auto & item : root.as_array()) {
+        if (!item.is_object()) throw std::invalid_argument("requests_json entries must be JSON objects");
+        BatchRequest request;
+        request.text = engine::io::json::optional_string(item, "text", "");
+        request.text_language = engine::io::json::optional_string(item, "text_language", "");
+        request.voice_id = engine::io::json::optional_string(item, "voice_id", "");
+        if (const auto * artifacts = item.find("artifacts"); artifacts != nullptr && artifacts->is_array())
+            request.artifacts_json = engine::io::json::stringify(*artifacts);
+        if (const auto * options = item.find("options"); options != nullptr && options->is_object())
+            request.options_json = engine::io::json::stringify(*options);
+        if (const auto * audio = item.find("audio"); audio != nullptr && audio->is_object()) {
+            request.has_audio = true;
+            const auto offset = audio->find("offset");
+            const auto count = audio->find("count");
+            if (offset == nullptr || !offset->is_number() || count == nullptr || !count->is_number())
+                throw std::invalid_argument("batch request audio needs numeric \"offset\" and \"count\"");
+            request.audio_offset = offset->as_i64();
+            request.audio_count = static_cast<int32_t>(count->as_i64());
+        }
+        requests.push_back(std::move(request));
+    }
+    return requests;
 }
 
 // ---- streaming ----------------------------------------------------------------
@@ -659,8 +735,8 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
         return AUDIOCPP_ERR_BAD_ARG;
     }
     out_info->abi_major = 1;
-    out_info->abi_minor = 3;
-    out_info->shim_version = "audiocpp-dotnet-shim 0.4.0";
+    out_info->abi_minor = 4;
+    out_info->shim_version = "audiocpp-dotnet-shim 0.5.0";
     out_info->audio_cpp_commit = kCommit;
     out_info->backend = kBackend;
     uint64_t capabilities = AUDIOCPP_CAP_SYNTHESIZE |
@@ -669,7 +745,9 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
         AUDIOCPP_CAP_STREAMING |
         AUDIOCPP_CAP_TASK_CATALOG |
         AUDIOCPP_CAP_ARTIFACTS |
-        AUDIOCPP_CAP_EXEC_OPTIONS;
+        AUDIOCPP_CAP_EXEC_OPTIONS |
+        AUDIOCPP_CAP_BATCH |
+        AUDIOCPP_CAP_OPTION_ARRAYS;
     // Only advertise the package manager when this build actually links it:
     // audiocpp_get_package_catalog/audiocpp_install_package return UNSUPPORTED otherwise.
 #if defined(AUDIOCPP_DOTNET_HAS_MODEL_MANAGER)
@@ -773,7 +851,10 @@ AUDIOCPP_API audiocpp_model * audiocpp_model_load(const char * model_path, const
         engine::runtime::ModelLoadRequest request;
         request.model_path = std::filesystem::path(model_path);
         if (family_hint != nullptr && *family_hint != '\0') request.family_hint = std::string(family_hint);
-        parse_options(load_options_json, request.options);
+        // Model-load options stay scalar-only (ModelLoadRequest::options upstream
+        // has no array counterpart), so array values are rejected with a clear
+        // message instead of being silently dropped.
+        parse_options(load_options_json, request.options, nullptr);
         context->session_options = request.options;
         context->backend.type = parse_backend(backend);
         context->backend.device = device;
@@ -917,6 +998,105 @@ AUDIOCPP_API int32_t audiocpp_model_run_json(
     return audiocpp_model_run_json_ex(context, task, text, nullptr, audio_samples, audio_count, audio_sample_rate,
         audio_channels, voice_id, ref_pcm, ref_count, ref_sample_rate, nullptr, options_json,
         out_json, err, errlen);
+}
+
+AUDIOCPP_API int32_t audiocpp_model_run_json_batch(
+    audiocpp_model * context, const char * task,
+    const char * requests_json,
+    const float * audio_samples, int32_t audio_pool_count,
+    int32_t audio_sample_rate, int32_t audio_channels,
+    char ** out_json, char * err, size_t errlen) {
+    if (context == nullptr || context->model == nullptr || out_json == nullptr) {
+        set_error(err, errlen, "invalid model or output argument"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    *out_json = nullptr;
+    if (audio_samples == nullptr && audio_pool_count != 0) {
+        set_error(err, errlen, "audio_pool_count is set but audio_samples is null"); return AUDIOCPP_ERR_BAD_ARG;
+    }
+    if (audio_samples != nullptr && (audio_pool_count < 0 || audio_sample_rate <= 0 || audio_channels <= 0)) {
+        set_error(err, errlen, "audio_pool_count, audio_sample_rate and audio_channels must be positive when audio_samples is supplied");
+        return AUDIOCPP_ERR_BAD_ARG;
+    }
+    try {
+        const auto batch = parse_batch_requests(requests_json);
+        // Resolve the task family once: an explicit token wins; otherwise infer
+        // from the request shapes, and refuse mixed shapes (some with audio,
+        // some without) because one batch is one task family.
+        engine::runtime::VoiceTaskKind task_kind;
+        if (task != nullptr && *task != '\0') {
+            task_kind = parse_task_kind(task);
+        } else {
+            const bool any_audio = std::any_of(batch.begin(), batch.end(), [](const BatchRequest & r) { return r.has_audio; });
+            const bool all_audio = std::all_of(batch.begin(), batch.end(), [](const BatchRequest & r) { return r.has_audio; });
+            if (any_audio != all_audio)
+                throw std::invalid_argument(
+                    "mixed batch: some requests carry audio and some do not. Pass an explicit task token.");
+            task_kind = parse_task_kind(any_audio ? "asr" : "tts");
+        }
+        engine::runtime::TaskSpec spec;
+        spec.task = task_kind;
+        spec.mode = engine::runtime::RunMode::Offline;
+        engine::runtime::SessionOptions session_options;
+        session_options.backend = context->backend;
+        session_options.options = context->session_options;
+        auto session = context->model->create_task_session(spec, session_options);
+        // Build every TaskRequest first so a malformed entry (offset past the
+        // buffer, bad options) fails before the first inference runs.
+        std::vector<engine::runtime::TaskRequest> requests;
+        requests.reserve(batch.size());
+        for (const auto & entry : batch) {
+            engine::runtime::TaskRequest request;
+            const float * entry_samples = nullptr;
+            if (entry.has_audio) {
+                if (audio_samples == nullptr)
+                    throw std::invalid_argument("batch request references audio but audio_samples is null");
+                if (entry.audio_offset < 0 || entry.audio_count <= 0 ||
+                    entry.audio_offset + static_cast<int64_t>(entry.audio_count) > static_cast<int64_t>(audio_pool_count)) {
+                    throw std::invalid_argument(
+                        "batch request audio offset/count is outside the audio pool (pool has " +
+                        std::to_string(audio_pool_count) + " samples)");
+                }
+                entry_samples = audio_samples + entry.audio_offset;
+            }
+            fill_request(
+                request,
+                entry.text.empty() ? nullptr : entry.text.c_str(),
+                entry.text_language.empty() ? nullptr : entry.text_language.c_str(),
+                entry_samples, entry.audio_count, entry_samples != nullptr ? audio_sample_rate : 0,
+                entry_samples != nullptr ? audio_channels : 0,
+                entry.voice_id.empty() ? nullptr : entry.voice_id.c_str(),
+                nullptr, 0, 0,
+                entry.artifacts_json.empty() ? nullptr : entry.artifacts_json.c_str(),
+                entry.options_json.empty() ? nullptr : entry.options_json.c_str());
+            requests.push_back(std::move(request));
+        }
+        session->prepare(engine::runtime::build_preparation_request(requests.front()));
+        std::vector<engine::runtime::TaskResult> results;
+        auto * batched = dynamic_cast<engine::runtime::IBatchedOfflineVoiceTaskSession *>(session.get());
+        if (batched != nullptr) {
+            results = batched->run_batch(requests);
+            if (results.size() != requests.size())
+                throw std::runtime_error("batched run returned " + std::to_string(results.size()) +
+                    " results for " + std::to_string(requests.size()) + " requests");
+        } else {
+            auto * offline = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(session.get());
+            if (offline == nullptr) throw std::runtime_error("task does not support offline execution");
+            results.reserve(requests.size());
+            for (auto & request : requests) results.push_back(offline->run(request));
+        }
+        std::ostringstream json;
+        json << "{\"schema_version\":" << AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION
+             << ",\"task\":\"" << json_escape(engine::runtime::to_string(task_kind)) << "\",\"results\":[";
+        for (size_t i = 0; i < results.size(); ++i) {
+            if (i != 0) json << ',';
+            write_task_result_json(json, results[i], nullptr);
+        }
+        json << "]}";
+        *out_json = copy_string(json.str());
+        return AUDIOCPP_OK;
+    } catch (const std::invalid_argument & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_BAD_ARG;
+    } catch (const std::exception & exception) { set_error(err, errlen, exception.what()); return AUDIOCPP_ERR_INFERENCE_FAILED;
+    } catch (...) { set_error(err, errlen, "unknown batch inference failure"); return AUDIOCPP_ERR_INFERENCE_FAILED; }
 }
 
 AUDIOCPP_API int32_t audiocpp_stream_open(

@@ -109,7 +109,7 @@ across upstream releases.
 ### Upstream pinning
 
 The wrapper targets a pinned upstream commit
-(`78d47706c30ef215ba9ad3559baff309efeb5260`, recorded in `eng/upstream.lock.json`) so it
+(current pin, recorded in `eng/upstream.lock.json`) so it
 never builds a moving `main`. It does not redistribute model weights; the companion CLI
 downloads them separately.
 

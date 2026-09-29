@@ -84,6 +84,11 @@ internal static partial class NativeMethods
         float* referencePcm, int referenceCount, int referenceSampleRate, string? artifactsJson, string? optionsJson,
         out IntPtr outputJson, IntPtr error, nuint errorLength);
 
+    [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_model_run_json_batch", StringMarshalling = StringMarshalling.Utf8)]
+    internal static unsafe partial int ModelRunJsonBatch(SafeModelHandle model, string? task, string requestsJson,
+        float* audioPool, int audioPoolCount, int audioSampleRate, int audioChannels,
+        out IntPtr outputJson, IntPtr error, nuint errorLength);
+
     [LibraryImport(DefaultLibraryName, EntryPoint = "audiocpp_stream_open", StringMarshalling = StringMarshalling.Utf8)]
     internal static partial int StreamOpen(
         SafeModelHandle model, string task, string? optionsJson,

@@ -79,7 +79,7 @@ Publishing is then a manual `dotnet nuget push`. `pack.ps1` already runs
 
 ## Notes
 
-- **Why CI cannot build the natives.** A full-set shim compiles 74 model families plus
+- **Why CI cannot build the natives.** A full-set shim compiles 101 model families plus
   the engine; the CUDA one needs the NVIDIA toolkit. Neither fits a GitHub-hosted
   runner. The archives are the seam: built on real hardware, consumed by CI.
 - **Version.** `Directory.Build.props` holds `VersionPrefix`; release automation passes

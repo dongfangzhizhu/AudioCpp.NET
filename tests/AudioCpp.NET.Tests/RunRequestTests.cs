@@ -22,7 +22,9 @@ public sealed class RunRequestTests
         Assert.Equal(AudioCppTaskKinds.VoiceCloning, AudioCppTaskKinds.Normalize("clone"));
         Assert.Equal(AudioCppTaskKinds.VoiceDesign, AudioCppTaskKinds.Normalize("design"));
         Assert.Equal(AudioCppTaskKinds.SpeakerRecognition, AudioCppTaskKinds.Normalize("speaker"));
-        Assert.Equal(AudioCppTaskKinds.VoiceConversion, AudioCppTaskKinds.Normalize("codec"));
+        // Upstream removed the fake "codec" alias when the task vocabulary became
+        // public (#544): miocodec's spec now declares vc/s2s directly.
+        Assert.Null(AudioCppTaskKinds.Normalize("codec"));
         // Tokens are matched case-insensitively and normalized to lower case.
         Assert.Equal(AudioCppTaskKinds.Asr, AudioCppTaskKinds.Normalize("ASR"));
         Assert.Equal(AudioCppTaskKinds.AudioGeneration, AudioCppTaskKinds.Normalize("  Music  "));
@@ -41,9 +43,10 @@ public sealed class RunRequestTests
     [Fact]
     public void AliasTablePointsOnlyAtCanonicalTokens()
     {
-        // Eight model_spec tokens beyond the fourteen canonical ones. If the native
-        // parser and this table disagree a model silently becomes unreachable.
-        Assert.Equal(8, AudioCppTaskKinds.Aliases.Count);
+        // Seven model_spec tokens beyond the fourteen canonical ones (upstream's
+        // task vocabulary; "codec" was removed there in #544). If the native parser
+        // and this table disagree a model silently becomes unreachable.
+        Assert.Equal(7, AudioCppTaskKinds.Aliases.Count);
         Assert.All(AudioCppTaskKinds.Aliases.Values,
             canonical => Assert.Contains(canonical, AudioCppTaskKinds.Canonical));
     }
@@ -181,6 +184,28 @@ public sealed class RunRequestTests
             [new AudioCppInputArtifact { Kind = "x", PayloadHex = "not-hex" }]));
         Assert.Throws<ArgumentException>(() => AudioCppRunRequests.SerializeArtifacts(
             [new AudioCppInputArtifact { Kind = "x", PayloadHex = "00", PayloadText = "y" }]));
+    }
+
+    [Fact]
+    public void OptionArraysSerializeIntoTheOptionsJson()
+    {
+        // Scalar and list-valued options share one JSON object; the native parser
+        // (ABI 1.4+) routes array values to TaskRequest::option_arrays.
+        var json = AudioCppRunRequests.SerializeOptions(
+            null,
+            new Dictionary<string, string> { ["temperature"] = "0.5" },
+            new Dictionary<string, IReadOnlyList<string>> { ["phonemes"] = ["k", "o"] });
+
+        Assert.NotNull(json);
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Equal("0.5", document.RootElement.GetProperty("temperature").GetString());
+        var phonemes = document.RootElement.GetProperty("phonemes");
+        Assert.Equal(System.Text.Json.JsonValueKind.Array, phonemes.ValueKind);
+        Assert.Equal(["k", "o"], phonemes.EnumerateArray().Select(item => item.GetString()!).ToArray());
+
+        Assert.Null(AudioCppRunRequests.SerializeOptions(null, null, null));
+        Assert.Throws<ArgumentException>(() => AudioCppRunRequests.SerializeOptions(
+            null, null, new Dictionary<string, IReadOnlyList<string>> { ["phonemes"] = [] }));
     }
 
     [Fact]
