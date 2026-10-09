@@ -359,6 +359,37 @@ jobs:
               --skip-duplicate
           done
 
+      # nuget.org matches its trusted publisher against the OIDC token's claims, not
+      # against anything we send separately: repository, workflow and environment must
+      # each equal what the publisher entry says. `dotnet nuget push` never shows that
+      # token, so a mismatch is only visible as the anonymous-fallback 401. Decode the
+      # token's payload here (claims only -- the JWT itself is masked, not printed) so
+      # the three fields can be compared against the nuget.org entry line by line.
+      - name: Probe the OIDC token
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::no OIDC request credentials in the environment -- the job lacks 'permissions: id-token: write'"
+            exit 1
+          fi
+          RESP=$(curl -sS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=nuget.org" \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          JWT=$(printf '%s' "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))")
+          if [ -z "$JWT" ]; then
+            echo "::error::no OIDC token returned: $(printf '%s' "$RESP" | head -c 200)"
+            exit 1
+          fi
+          echo "OIDC token claims (audience nuget.org):"
+          printf '%s' "$JWT" | cut -d. -f2 | tr '_-' '/+' \
+            | python3 -c "
+import sys,base64,json
+p=sys.stdin.read().strip()
+p+='='*(-len(p)%4)
+c=json.loads(base64.b64decode(p))
+for k in ('iss','aud','sub','repository','repository_owner','workflow','job_workflow_ref','ref','environment','environment_ref','run_id','actor'):
+    print(f'  {k:20s} {c.get(k, \"<absent>\")}')"
+
       # `dotnet nuget push` tries OIDC exactly once and, when that fails, silently
       # falls back to a stored API key -- so a trusted-publishing misconfiguration
       # surfaces only as "401 ... X-NuGet-ApiKey", which reads like a missing secret
