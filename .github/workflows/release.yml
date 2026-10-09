@@ -1,6 +1,13 @@
 name: release
 
-# Builds the NuGet packages and pushes them to nuget.org.
+# packages on nuget.org and pushes them.
+#
+# Publishing uses nuget.org trusted publishing (OIDC): no API key secret is stored.
+# The trust entry on nuget.org names this repository, this workflow file and the
+# `release` environment, so the publish job declares that environment and asks for
+# an id-token; the SDK exchanges the OIDC token for a short-lived push token. That
+# is also why a fork pull request cannot publish even if it somehow reaches this
+# job: it cannot obtain a token for a repository the trust entry does not name.
 #
 # Two entry points:
 #
@@ -286,32 +293,48 @@ jobs:
     needs: [resolve, pack]
     if: needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    # Trusted publishing (OIDC) instead of a stored API key: nuget.org trusts this
+    # repository, this workflow and this environment, and exchanges a short-lived
+    # token for a push token. There is no long-lived secret to leak or rotate, and a
+    # fork pull request cannot obtain one.
+    #
+    # `environment` is part of the trust relationship configured on nuget.org, so it
+    # has to match that entry exactly; `id-token: write` is what lets the SDK request
+    # the OIDC token in the first place. Both are required -- dropping either fails the
+    # exchange at push time with an opaque 401 rather than a configuration error.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
     steps:
+      # Not just for the packages: `dotnet nuget push` performs the OIDC exchange, and
+      # that support landed in the .NET 8.0.4xx/9.x SDKs. A hosted runner's default
+      # SDK is older than that, so the version is pinned rather than assumed.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
       - uses: actions/download-artifact@v4
         with:
           name: nupkg
           path: packages
 
-      - name: Check for an API key
-        run: |
-          if [ -z "${{ secrets.NUGET_API_KEY }}" ]; then
-            echo "::error title=Missing NUGET_API_KEY::Add a nuget.org API key as the repository secret NUGET_API_KEY."
-            exit 1
-          fi
-
       # --skip-duplicate keeps a re-run idempotent: a partially published release can
       # be retried without failing on the packages that already landed.
+      #
+      # No --api-key: under trusted publishing the SDK reads ACTIONS_ID_TOKEN_REQUEST_*
+      # from the environment and exchanges it at the source. Passing an empty
+      # --api-key would switch NuGet back to anonymous auth and every push would 401,
+      # so the flag is omitted rather than parameterised.
       - name: Push packages
         run: |
           set -euo pipefail
           dotnet nuget push "packages/*.nupkg" \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
           for s in packages/*.snupkg; do
             [ -e "$s" ] || continue
             dotnet nuget push "$s" \
-              --api-key "${{ secrets.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
           done

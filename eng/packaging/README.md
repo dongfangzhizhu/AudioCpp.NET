@@ -73,8 +73,17 @@ release tag. Leave **publish** unchecked first to inspect the packages as build
 artifacts; re-run with it checked to push to nuget.org. Pushing a `v*.*.*` tag does the
 same thing automatically.
 
-The workflow needs the repository secret `NUGET_API_KEY` (a nuget.org key with
-push permission for the three package IDs).
+发布到 nuget.org 走**信任发布（OIDC）**：仓库里**不存任何 API key**。nuget.org 上的信任条目
+指名了本仓库、本workflow 文件（`release.yml`）与 `release` 环境，所以 publish 任务声明
+`environment: release` 并申请 `id-token: write`，由SDK 用 OIDC 令牌换一份短期推送令牌。
+
+三个要点，缺任何一个都会在推送时报一个含义不明的 401：
+
+- job 级 `environment: release` —— 必须与nuget.org 上的配置**逐字一致**；
+- job 级 `permissions` 含 `id-token: write` —— 没有它就拿不到 OIDC 令牌；
+- **不传 `--api-key`** —— 传空值会让 NuGet 退回匿名认证。
+
+`dotnet-version` 也被固定在 `10.0.x`：OIDC 交换需要较新的 SDK，用 runner 的默认版本可能不够。
 
 ### 5. Local dry run (optional)
 
