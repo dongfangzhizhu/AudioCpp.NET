@@ -346,19 +346,6 @@ jobs:
       # from the environment and exchanges it at the source. Passing an empty
       # --api-key would switch NuGet back to anonymous auth and every push would 401,
       # so the flag is omitted rather than parameterised.
-      - name: Push packages
-        run: |
-          set -euo pipefail
-          dotnet nuget push "packages/*.nupkg" \
-            --source https://api.nuget.org/v3/index.json \
-            --skip-duplicate
-          for s in packages/*.snupkg; do
-            [ -e "$s" ] || continue
-            dotnet nuget push "$s" \
-              --source https://api.nuget.org/v3/index.json \
-              --skip-duplicate
-          done
-
       # nuget.org matches its trusted publisher against the OIDC token's claims, not
       # against anything we send separately: repository, workflow and environment must
       # each equal what the publisher entry says. `dotnet nuget push` never shows that
@@ -385,6 +372,19 @@ jobs:
           fi
           echo "OIDC token claims (audience nuget.org):"
           printf '%s' "$JWT" | cut -d. -f2 | tr '_-' '/+' | python3 -c "import sys,base64,json; p=sys.stdin.read().strip(); p+='='*(-len(p)%4); c=json.loads(base64.b64decode(p)); [print('  %-20s' % k, c.get(k, '<absent>')) for k in ('iss','aud','sub','repository','repository_owner','workflow','job_workflow_ref','ref','environment','environment_ref','run_id','actor')]"
+
+      - name: Push packages
+        run: |
+          set -euo pipefail
+          dotnet nuget push "packages/*.nupkg" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+          for s in packages/*.snupkg; do
+            [ -e "$s" ] || continue
+            dotnet nuget push "$s" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done
 
       # `dotnet nuget push` tries OIDC exactly once and, when that fails, silently
       # falls back to a stored API key -- so a trusted-publishing misconfiguration
