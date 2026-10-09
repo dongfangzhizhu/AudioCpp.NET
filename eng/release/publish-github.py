@@ -320,9 +320,16 @@ def publish_release(owner: str, name: str, release_id: int, tag: str, token: str
 
 
 def upload_assets(owner: str, name: str, release: dict, assets_dir: pathlib.Path, token: str) -> int:
-    files = sorted(p for p in assets_dir.glob("*.zip") if p.is_file())
+    # audiocpp-native-manifest.json is as much an asset as the zips: release.yml refuses
+    # to publish the runtime packages when a release carries archives without it ("their
+    # audio.cpp pin cannot be verified"). Pushing the tag already starts that workflow,
+    # so uploading only the zips guaranteed one failed run every release.
+    files = sorted(
+        p for p in assets_dir.iterdir()
+        if p.is_file() and (p.suffix == ".zip" or p.name == "audiocpp-native-manifest.json")
+    )
     if not files:
-        warn(f"{assets_dir} 下没有 .zip，跳过附件上传")
+        warn(f"{assets_dir} 下没有 .zip 或 audiocpp-native-manifest.json，跳过附件上传")
         return 0
     existing = {a["name"] for a in release.get("assets", [])}
     ok = 0
@@ -408,7 +415,7 @@ def main() -> int:
     ap.add_argument("--draft-first", action="store_true",
                     help="先建草稿 Release、传完附件再转正式。草稿不会创建标签，"
                          "所以不会在附件就位前触发依赖附件的工作流（release.yml）。")
-    ap.add_argument("--assets", default="", help="Release 附件目录（上传其中的 *.zip）")
+    ap.add_argument("--assets", default="", help="Release 附件目录（上传其中的 *.zip 与 audiocpp-native-manifest.json）")
     ap.add_argument("--notes-file", default="", help="Release 说明文件")
     ap.add_argument("--prerelease", action="store_true", help="标记为预发布")
     ap.add_argument("--set-secret", action="append", default=[],
