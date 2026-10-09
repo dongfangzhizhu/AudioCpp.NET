@@ -40,8 +40,23 @@ $staging = "$repo\build\nuget-staging"
 $made = 0
 $skipped = @()
 
+# The archive suffix is the backend name. Kept as an explicit table rather than
+# "cuda or cpu" so a new backend can never be silently archived under the CPU name --
+# that mistake ships a Vulkan shim labelled "cpu" and nothing detects it downstream.
+$archiveSuffix = @{
+    cpu    = "cpu"
+    cuda   = "cuda"
+    vulkan = "vulkan"
+}
 foreach ($backend in $Backends) {
-    $suffix = if ($backend -eq "cuda") { "cuda" } else { "cpu" }
+    if (-not $archiveSuffix.ContainsKey($backend)) {
+        Write-Output "FATAL: unknown backend '$backend' (known: $($archiveSuffix.Keys -join ', '))"
+        exit 2
+    }
+}
+
+foreach ($backend in $Backends) {
+    $suffix = $archiveSuffix[$backend]
     foreach ($rid in @("win-x64", "linux-x64")) {
         $library = if ($rid -eq "win-x64") { "audiocpp_dotnet_native.dll" } else { "libaudiocpp_dotnet_native.so" }
         $source = "$staging\$backend\$rid\$library"
@@ -93,7 +108,7 @@ if ($made -gt 0) {
     $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
     $entries = @()
     foreach ($backend in $Backends) {
-        $suffix = if ($backend -eq "cuda") { "cuda" } else { "cpu" }
+        $suffix = $archiveSuffix[$backend]
         foreach ($rid in @("win-x64", "linux-x64")) {
             $library = if ($rid -eq "win-x64") { "audiocpp_dotnet_native.dll" } else { "libaudiocpp_dotnet_native.so" }
             $source = "$staging\$backend\$rid\$library"

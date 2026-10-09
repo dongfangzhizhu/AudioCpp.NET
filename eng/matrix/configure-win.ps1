@@ -45,6 +45,42 @@ if ($Backend -eq "cuda") {
     $cmakeArgs += "-DCUDAToolkit_ROOT=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3"
     $cmakeArgs += "-DCMAKE_CUDA_ARCHITECTURES=89"
 }
+elseif ($Backend -eq "vulkan") {
+    # ggml-vulkan compiles its shaders at build time, so the SDK is required here
+    # (not just the loader the driver provides). Resolve it the same way
+    # win-full-matrix.ps1 does: AUDIOCPP_VULKAN_SDK, then VULKAN_SDK, then the
+    # default install locations.
+    $sdk = $env:AUDIOCPP_VULKAN_SDK
+    if (-not $sdk -or -not (Test-Path (Join-Path $sdk "Bin\glslc.exe"))) { $sdk = $env:VULKAN_SDK }
+    if (-not $sdk -or -not (Test-Path (Join-Path $sdk "Bin\glslc.exe"))) {
+        foreach ($root in @("C:\VulkanSDK", "$env:LOCALAPPDATA\Programs\VulkanSDK", "C:\Program Files\VulkanSDK")) {
+            if (-not (Test-Path $root)) { continue }
+            $hit = Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending |
+                Where-Object { Test-Path (Join-Path $_.FullName "Bin\glslc.exe") } |
+                Select-Object -First 1
+            if ($hit) { $sdk = $hit.FullName; break }
+        }
+    }
+    if (-not $sdk -or -not (Test-Path (Join-Path $sdk "Bin\glslc.exe"))) {
+        Write-Output "FATAL: backend 'vulkan' needs the Vulkan SDK (glslc). Install it from"
+        Write-Output "       https://vulkan.lunarg.com/sdk/home or set AUDIOCPP_VULKAN_SDK."
+        exit 2
+    }
+    Write-Output "VULKAN_SDK=$sdk"
+    # VULKAN_SDK alone is NOT enough: CMake's FindVulkan does not read it (CMake 4.4
+    # reports it as an unused variable), and it only looks for glslc in a component
+    # layout the SDK installer never writes. Naming the three pieces explicitly is what
+    # actually satisfies `find_package(Vulkan COMPONENTS glslc REQUIRED)`.
+    $cmakeArgs += "-DVulkan_INCLUDE_DIR=$sdk\Include"
+    $cmakeArgs += "-DVulkan_LIBRARY=$sdk\Lib\vulkan-1.lib"
+    $cmakeArgs += "-DVulkan_GLSLC_EXECUTABLE=$sdk\Bin\glslc.exe"
+    # The shader compiler and headers must also be reachable for the compile itself,
+    # not just for find_package.
+    $env:INCLUDE = "$sdk\Include;$env:INCLUDE"
+    $env:LIB     = "$sdk\Lib;$env:LIB"
+    $env:PATH    = "$sdk\Bin;$env:PATH"
+}
 
 & cmake @cmakeArgs
 $code = $LASTEXITCODE

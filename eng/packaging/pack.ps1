@@ -20,6 +20,14 @@ $ErrorActionPreference = "Continue"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repo
 
+# backend -> runtime package id. One table so adding a backend is a single edit and
+# pack.ps1, make-native-archives.ps1 and the archive-name convention cannot drift apart.
+$packageForBackend = @{
+    cpu    = "AudioCpp.NET.Runtime"
+    cuda   = "AudioCpp.NET.Runtime.Cuda"
+    vulkan = "AudioCpp.NET.Runtime.Vulkan"
+}
+
 if ([string]::IsNullOrWhiteSpace($OutputDir)) { $OutputDir = "$repo\build\nuget" }
 New-Item -ItemType Directory -Force -Path $OutputDir | Out-Null
 
@@ -30,7 +38,11 @@ if (-not $SkipNative) {
 $failed = 0
 $projects = @("$repo\src\AudioCpp.NET\AudioCpp.NET.csproj")
 foreach ($backend in $Backends) {
-    $name = if ($backend -eq "cuda") { "AudioCpp.NET.Runtime.Cuda" } else { "AudioCpp.NET.Runtime" }
+    if (-not $packageForBackend.ContainsKey($backend)) {
+        Write-Output "!!! unknown backend '$backend' (known: $($packageForBackend.Keys -join ', '))"
+        exit 2
+    }
+    $name = $packageForBackend[$backend]
     $projects += "$repo\src\$name\$name.csproj"
 }
 
@@ -76,7 +88,7 @@ if (-not $python) {
     Write-Output "!!! python not found on PATH; skipping package verification"
     $failed++
 } else {
-    & $python "$repo\eng\packaging\verify_packages.py" $OutputDir --natives staged --rids $rids
+    & $python "$repo\eng\packaging\verify_packages.py" $OutputDir --natives staged --rids $rids --backends ($Backends -join ",")
     if ($LASTEXITCODE -ne 0) { Write-Output "!!! PACKAGE VERIFICATION FAILED (exit $LASTEXITCODE)"; $failed++ }
 }
 

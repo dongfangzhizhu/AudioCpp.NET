@@ -5,13 +5,13 @@
   </PropertyGroup>
 
   <!--
-    Deliberately the same target name as the CPU package's guard: MSBuild lets a later
-    definition replace an earlier one, so whichever package is imported last still
-    enforces the single-runtime rule, and the two bodies are identical anyway.
+    Deliberately the same target name as the CPU and Vulkan packages' guard: MSBuild
+    lets a later definition replace an earlier one, so whichever package is imported last
+    still enforces the single-runtime rule, and the bodies are identical anyway.
   -->
   <Target Name="AudioCppRuntimeConflictGuard" BeforeTargets="PrepareForBuild">
     <Error Condition="$(_AudioCppNativeRuntimeCount) &gt; 1"
-           Text="Multiple AudioCpp.NET native runtimes are referenced (@(AudioCppNativeRuntime)). They all provide the same native file name, so only one can be used per project. Keep exactly one of AudioCpp.NET.Runtime (CPU) or AudioCpp.NET.Runtime.Cuda, and select the backend at run time through AudioCppRuntimeOptions." />
+           Text="Multiple AudioCpp.NET native runtimes are referenced (@(AudioCppNativeRuntime)). They all provide the same native file name, so only one can be used per project. Keep exactly one of AudioCpp.NET.Runtime (CPU), AudioCpp.NET.Runtime.Cuda (NVIDIA) or AudioCpp.NET.Runtime.Vulkan (cross-vendor GPU), and select the backend at run time through AudioCppRuntimeOptions." />
   </Target>
 
 </Project>

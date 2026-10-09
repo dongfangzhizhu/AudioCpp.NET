@@ -103,11 +103,11 @@ fi
 for zip in "${zips[@]}"; do
   name=$(basename "$zip" .zip)                  # audiocpp-native-win-x64-cpu
   rest=${name#audiocpp-native-}                 # win-x64-cpu
-  backend=${rest##*-}                           # cpu | cuda
+  backend=${rest##*-}                           # cpu | cuda | vulkan
   rid=${rest%-*}                                # win-x64 | linux-x64
 
   case "$backend" in
-    cpu|cuda) ;;
+    cpu|cuda|vulkan) ;;
     *) echo "FATAL: cannot parse backend from '$name'" >&2; exit 2 ;;
   esac
 

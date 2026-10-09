@@ -5,14 +5,14 @@
   </PropertyGroup>
 
   <!--
-    win-x64/linux-x64 shims all ship as audiocpp_dotnet_native.dll / .so, so the CPU and
-    CUDA packages collide on the exact same runtimes/<rid>/native path. Restore would
-    resolve that non-deterministically, and the app would load whichever backend
-    happened to win. Fail loudly instead, and say what to do about it.
+    win-x64/linux-x64 shims all ship as audiocpp_dotnet_native.dll / .so, so the CPU,
+    CUDA and Vulkan packages collide on the exact same runtimes/<rid>/native path.
+    Restore would resolve that non-deterministically, and the app would load whichever
+    backend happened to win. Fail loudly instead, and say what to do about it.
   -->
   <Target Name="AudioCppRuntimeConflictGuard" BeforeTargets="PrepareForBuild">
     <Error Condition="$(_AudioCppNativeRuntimeCount) &gt; 1"
-           Text="Multiple AudioCpp.NET native runtimes are referenced (@(AudioCppNativeRuntime)). They all provide the same native file name, so only one can be used per project. Keep exactly one of AudioCpp.NET.Runtime (CPU) or AudioCpp.NET.Runtime.Cuda, and select the backend at run time through AudioCppRuntimeOptions." />
+           Text="Multiple AudioCpp.NET native runtimes are referenced (@(AudioCppNativeRuntime)). They all provide the same native file name, so only one can be used per project. Keep exactly one of AudioCpp.NET.Runtime (CPU), AudioCpp.NET.Runtime.Cuda (NVIDIA) or AudioCpp.NET.Runtime.Vulkan (cross-vendor GPU), and select the backend at run time through AudioCppRuntimeOptions." />
   </Target>
 
 </Project>

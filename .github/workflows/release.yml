@@ -17,7 +17,7 @@ name: release
 #
 # The managed package (AudioCpp.NET) is built from source and always ships.
 #
-# The two runtime packages carry prebuilt native shims, which cannot be built on a
+# The runtime packages carry prebuilt native shims, which cannot be built on a
 # GitHub-hosted runner: a full-set shim needs the audio.cpp toolchain, and the CUDA
 # one needs an NVIDIA toolkit and GPU. They are therefore assembled from native
 # archives attached to a GitHub Release, produced by
@@ -228,7 +228,8 @@ jobs:
               echo "Reason: $reason"
               echo
               echo "Only AudioCpp.NET was packed. It carries no native runtime, so consumers"
-              echo "also need AudioCpp.NET.Runtime (CPU) or AudioCpp.NET.Runtime.Cuda (NVIDIA)"
+              echo "also need AudioCpp.NET.Runtime (CPU), AudioCpp.NET.Runtime.Cuda (NVIDIA)"
+              echo "or AudioCpp.NET.Runtime.Vulkan (any Vulkan 1.2+ GPU)"
               echo "from a release whose archives match the pinned audio.cpp commit."
               echo
               echo "Fix: run eng/packaging/make-native-archives.ps1 against the pinned checkout,"
@@ -261,6 +262,15 @@ jobs:
           if [ "$RUNTIME" = "staged" ]; then
             dotnet pack src/AudioCpp.NET.Runtime/AudioCpp.NET.Runtime.csproj -c Release -o packages -p:Version="$V"
             dotnet pack src/AudioCpp.NET.Runtime.Cuda/AudioCpp.NET.Runtime.Cuda.csproj -c Release -o packages -p:Version="$V"
+            # Vulkan is optional per release: a tag built before the backend existed
+            # (or one whose Vulkan archives could not be produced) must still publish the
+            # CPU and CUDA packages instead of failing pack on a missing staging dir.
+            if compgen -G "build/nuget-staging/vulkan/*" > /dev/null; then
+              dotnet pack src/AudioCpp.NET.Runtime.Vulkan/AudioCpp.NET.Runtime.Vulkan.csproj -c Release -o packages -p:Version="$V"
+            else
+              echo "::warning title=Vulkan runtime package skipped::no build/nuget-staging/vulkan in this release"
+              echo "Backends: \`cpu\` \`cuda\`" >> "$GITHUB_STEP_SUMMARY"
+            fi
           fi
           echo "--- produced ---"
           ls -la packages
@@ -274,11 +284,21 @@ jobs:
         run: |
           set -euo pipefail
           mode=skipped
+          backends=""
           if [ "$RUNTIME" = "staged" ]; then
             mode=staged
             echo "staged RIDs: ${RIDS:-<none>}"
+            # Verify exactly the runtime packages this release packed. The Vulkan
+            # package is conditional (see Pack), so a release without its archives
+            # must not be asserted to contain one.
+            for backend in cpu cuda vulkan; do
+              if compgen -G "build/nuget-staging/$backend/*" > /dev/null; then
+                backends="${backends:+$backends,}$backend"
+              fi
+            done
+            echo "staged backends: $backends"
           fi
-          python3 eng/packaging/verify_packages.py packages --natives "$mode" --rids "${RIDS:-win-x64,linux-x64}"
+          python3 eng/packaging/verify_packages.py packages --natives "$mode" --rids "${RIDS:-win-x64,linux-x64}" --backends "$backends"
 
       - uses: actions/upload-artifact@v4
         with:

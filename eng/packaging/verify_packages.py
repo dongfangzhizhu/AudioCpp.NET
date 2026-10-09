@@ -38,6 +38,22 @@ NATIVE_FILE = {
 
 RUNTIME_REQUIRED = ["README-runtime.md"]
 
+# Every runtime asset package that may appear in a release, in the order a reader
+# should pick one. --backends narrows this to the set a given release actually
+# staged; the default keeps verifying all three so a half-staged backend set is
+# caught instead of silently shipped.
+RUNTIME_PACKAGE_IDS = [
+    "AudioCpp.NET.Runtime",
+    "AudioCpp.NET.Runtime.Cuda",
+    "AudioCpp.NET.Runtime.Vulkan",
+]
+
+BACKEND_TO_PACKAGE_ID = {
+    "cpu": "AudioCpp.NET.Runtime",
+    "cuda": "AudioCpp.NET.Runtime.Cuda",
+    "vulkan": "AudioCpp.NET.Runtime.Vulkan",
+}
+
 VERSION = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"
 
 
@@ -151,6 +167,10 @@ def main() -> int:
     parser.add_argument("--rids", default="win-x64,linux-x64",
                         help="comma-separated RIDs the runtime packages are expected to carry "
                              "(default: both; pass what was actually staged)")
+    parser.add_argument("--backends", default="",
+                        help="comma-separated backends this release packaged, e.g. cpu,vulkan "
+                             "(default: verify every runtime package; pass the set a release "
+                             "actually staged)")
     args = parser.parse_args()
 
     rids = [r.strip() for r in args.rids.split(",") if r.strip()]
@@ -158,6 +178,15 @@ def main() -> int:
     if unknown:
         print(f"FATAL: unknown RID(s): {', '.join(unknown)}", file=sys.stderr)
         return 2
+
+    package_ids = list(RUNTIME_PACKAGE_IDS)
+    if args.backends:
+        backends = [b.strip() for b in args.backends.split(",") if b.strip()]
+        unknown = [b for b in backends if b not in BACKEND_TO_PACKAGE_ID]
+        if unknown:
+            print(f"FATAL: unknown backend(s): {', '.join(unknown)}", file=sys.stderr)
+            return 2
+        package_ids = [BACKEND_TO_PACKAGE_ID[b] for b in backends]
     if args.natives == "staged" and not rids:
         print("FATAL: --natives staged but --rids is empty", file=sys.stderr)
         return 2
@@ -177,7 +206,7 @@ def main() -> int:
     else:
         print()
         print(f"runtime packages: expecting RIDs {', '.join(rids)}")
-        for package_id in ("AudioCpp.NET.Runtime", "AudioCpp.NET.Runtime.Cuda"):
+        for package_id in package_ids:
             verify_runtime(args.packages, package_id, rids, report)
 
     print()

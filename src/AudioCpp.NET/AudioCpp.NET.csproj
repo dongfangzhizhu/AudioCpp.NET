@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
 
     <PackageId>AudioCpp.NET</PackageId>
-    <Description>.NET bindings for the audio.cpp speech engine (ASR, TTS voice cloning, VAD and 70+ model families) over a versioned C ABI shim. Reference this package plus exactly one native runtime package (AudioCpp.NET.Runtime for CPU, AudioCpp.NET.Runtime.Cuda for NVIDIA GPUs).</Description>
+    <Description>.NET bindings for the audio.cpp speech engine (ASR, TTS voice cloning, VAD and 70+ model families) over a versioned C ABI shim. Reference this package plus exactly one native runtime package (AudioCpp.NET.Runtime for CPU, AudioCpp.NET.Runtime.Cuda for NVIDIA GPUs, AudioCpp.NET.Runtime.Vulkan for any Vulkan 1.2+ GPU).</Description>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
     <!--
