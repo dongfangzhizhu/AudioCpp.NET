@@ -47,13 +47,24 @@ powershell -File eng\packaging\make-native-archives.ps1
 # build/native-archives/audiocpp-native-linux-x64-cpu.zip
 # build/native-archives/audiocpp-native-win-x64-cuda.zip
 # build/native-archives/audiocpp-native-linux-x64-cuda.zip
+# build/native-archives/audiocpp-native-manifest.json   <- required, see below
 ```
+
+The manifest records which audio.cpp commit and shim ABI these binaries were built
+from, plus a SHA-256 per library and archive. It is not decoration: archives are
+binary artefacts CI cannot rebuild, so they can be carried over from an older release
+by mistake. Publishing an ABI 1.3 runtime next to an ABI 1.4 managed package passes
+every check in CI and fails only at a consumer's call site. A tag release therefore
+refuses to publish the runtime packages when the manifest is missing or disagrees
+with `eng/upstream.lock.json`; a manual run can override that with
+`strict_natives=false`, which downgrades it to a managed-only package plus a job
+summary.
 
 ### 3. Attach them to a GitHub Release
 
-Tag `v0.1.0` and attach the four archives to that release. The release workflow looks
-them up by tag, so the version in the tag, the version in the archives and the version
-of the packages must agree.
+Tag `v0.1.0` and attach the four archives **and** `audiocpp-native-manifest.json` to
+that release. The release workflow looks them up by tag, so the version in the tag,
+the version in the archives and the version of the packages must agree.
 
 ### 4. Run the release workflow
 

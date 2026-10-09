@@ -4,9 +4,12 @@
 #   audiocpp-native-linux-x64-cpu.zip
 #   audiocpp-native-win-x64-cuda.zip
 #   audiocpp-native-linux-x64-cuda.zip
+#   audiocpp-native-manifest.json   (provenance: pin, shim ABI, per-archive hashes)
 #
-# Each contains exactly one library file and nothing else, so the release job can
-# unpack them straight into build/nuget-staging/<backend>/<rid>/.
+# Each zip contains exactly one library file and nothing else, so the release job can
+# unpack them straight into build/nuget-staging/<backend>/<rid>/. The manifest is the
+# fingerprint that lets the release job reject archives built for a different pin:
+# without it a new tag silently ships a newer managed package against an older shim.
 #
 # This is the bridge between "the shims can only be built on a machine with the
 # toolchain (and, for CUDA, a GPU)" and "the packages must be assembled by CI". Attach
@@ -72,4 +75,63 @@ if ($skipped.Count -gt 0) {
     Write-Output "         build the missing backends first (eng\matrix scripts) and re-run."
 }
 Write-Output "archives: $made in $OutputDir"
+
+# --- provenance manifest ------------------------------------------------------
+#
+# Archives are binary artefacts that CI cannot rebuild, so they can outlive the
+# commit that produced them: attaching the previous release's archives to a new
+# tag publishes a managed package built against a newer shim ABI next to a
+# runtime package built against the older one, and nothing fails until a consumer
+# calls an entry point that only exists in the newer shim. The manifest states
+# which pin and ABI these archives were built from; import-native-archives.sh
+# (and therefore the release job) refuses to stage them when it disagrees with
+# eng/upstream.lock.json.
+#
+# Upload this file next to the archives.
+if ($made -gt 0) {
+    $lockPath = Join-Path $PSScriptRoot "..\upstream.lock.json"
+    $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
+    $entries = @()
+    foreach ($backend in $Backends) {
+        $suffix = if ($backend -eq "cuda") { "cuda" } else { "cpu" }
+        foreach ($rid in @("win-x64", "linux-x64")) {
+            $library = if ($rid -eq "win-x64") { "audiocpp_dotnet_native.dll" } else { "libaudiocpp_dotnet_native.so" }
+            $source = "$staging\$backend\$rid\$library"
+            $archive = "$OutputDir\audiocpp-native-$rid-$suffix.zip"
+            if (-not (Test-Path $source) -or -not (Test-Path $archive)) { continue }
+            $entries += [ordered]@{
+                rid              = $rid
+                backend          = $suffix
+                archive          = "audiocpp-native-$rid-$suffix.zip"
+                library          = $library
+                library_bytes    = (Get-Item $source).Length
+                library_sha256   = (Get-FileHash $source -Algorithm SHA256).Hash.ToLowerInvariant()
+                archive_sha256   = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+                archive_bytes    = (Get-Item $archive).Length
+            }
+        }
+    }
+    $manifest = [ordered]@{
+        schemaVersion         = 1
+        audioCppCommit        = $lock.commit.ToLowerInvariant()
+        audioCppRepository    = $lock.repository
+        shimAbiMajor          = [int]$lock.shimAbi.major
+        shimAbiMinor          = [int]$lock.shimAbi.minor
+        backendModelSet       = "full"
+        builtAtUtc            = [DateTime]::UtcNow.ToString("o")
+        archives              = $entries
+    }
+    $manifestPath = "$OutputDir\audiocpp-native-manifest.json"
+    # [System.IO.File]::WriteAllText instead of Set-Content -Encoding utf8NoBOM: the
+    # utf8NoBOM encoding name only exists on PowerShell 7+, and this script is also
+    # run under Windows PowerShell 5.1. The explicit UTF8Encoding($false) writes
+    # BOM-less UTF-8 on both.
+    $json = $manifest | ConvertTo-Json -Depth 6
+    [System.IO.File]::WriteAllText($manifestPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Output ""
+    Write-Output ("manifest: {0} (pin {1}, shim ABI {2}.{3})" -f `
+        (Split-Path $manifestPath -Leaf), $manifest.audioCppCommit.Substring(0, 12), `
+        $manifest.shimAbiMajor, $manifest.shimAbiMinor)
+}
+
 exit $(if ($made -eq 0) { 1 } else { 0 })

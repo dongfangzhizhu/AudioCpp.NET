@@ -17,6 +17,14 @@ name: release
 # eng/packaging/make-native-archives.ps1 on a machine that can build them. If those
 # archives are absent the runtime packages are skipped with a warning and the release
 # still proceeds for the managed package.
+#
+# The archives must also come with audiocpp-native-manifest.json, which records the
+# audio.cpp commit and shim ABI they were built from. A tag release refuses to publish
+# the runtime packages when that fingerprint is missing or disagrees with
+# eng/upstream.lock.json: shipping an ABI 1.3 runtime beside an ABI 1.4 managed
+# package passes every check here and fails only at a consumer's call site. Manual
+# runs can override with strict_natives=false, which downgrades it to a managed-only
+# package plus a job summary.
 
 on:
   push:
@@ -33,6 +41,10 @@ on:
         description: 'Push to nuget.org. Leave unchecked to only build and inspect.'
         type: boolean
         default: false
+      strict_natives:
+        description: 'Refuse to publish runtime packages whose native archives were built for a different audio.cpp pin (a tag push always does this).'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -50,6 +62,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
       publish: ${{ steps.v.outputs.publish }}
+      enforce_native_pin: ${{ steps.v.outputs.enforce_native_pin }}
     steps:
       - id: v
         shell: bash
@@ -59,6 +72,7 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_TAG: ${{ inputs.native_release_tag }}
           INPUT_PUBLISH: ${{ inputs.publish }}
+          INPUT_STRICT: ${{ inputs.strict_natives }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "push" ]; then
@@ -66,10 +80,14 @@ jobs:
             version="${REF_NAME#v}"
             tag="$REF_NAME"
             publish="true"
+            # A tag release is the one that reaches consumers, so it never ships
+            # runtime packages whose shim was built for another pin.
+            enforce_native_pin="1"
           else
             version="$INPUT_VERSION"
             tag="${INPUT_TAG:-v$INPUT_VERSION}"
             publish="${INPUT_PUBLISH:-false}"
+            enforce_native_pin="${INPUT_STRICT:-true}"
           fi
           test -n "$version" || { echo "no version resolved"; exit 1; }
           # SemVer sanity: a malformed version would only fail deep inside pack.
@@ -80,7 +98,8 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "tag=$tag"       >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
-          echo "resolved: version=$version tag=$tag publish=$publish"
+          echo "enforce_native_pin=$enforce_native_pin" >> "$GITHUB_OUTPUT"
+          echo "resolved: version=$version tag=$tag publish=$publish enforce_native_pin=$enforce_native_pin"
 
   verify:
     name: managed tests
@@ -109,6 +128,27 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      # Provenance gate. Archives are prebuilt binary artefacts that CI cannot
+      # rebuild, so they can be carried over from an older release by mistake. The
+      # manifest records the audio.cpp commit and shim ABI they were built from; a
+      # mismatch would publish a managed package built against shim ABI 1.4 next to
+      # a runtime package built against 1.3, which no test here catches and which a
+      # consumer only sees as a missing export at call time. continue-on-error keeps
+      # the failure legible: the decide step turns it into either a hard stop (tag
+      # release) or a managed-only package with a loud summary (manual run).
+      - name: Fetch native provenance manifest from the release
+        id: manifest
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p native-archives
+          gh release download "${{ needs.resolve.outputs.tag }}" \
+             --repo "${{ github.repository }}" \
+             --pattern 'audiocpp-native-manifest.json' \
+             --dir native-archives
+
       - name: Fetch native shim archives from the release
         id: natives
         continue-on-error: true
@@ -124,21 +164,70 @@ jobs:
           ls -la native-archives
 
       - name: Stage native shims
+        id: stage
         if: steps.natives.outcome == 'success'
+        continue-on-error: true
+        env:
+          AUDIOCPP_ENFORCE_NATIVE_PIN: ${{ needs.resolve.outputs.enforce_native_pin }}
         run: bash eng/packaging/import-native-archives.sh native-archives
 
-      - name: Warn when runtime packages must be skipped
-        if: steps.natives.outcome != 'success'
+      - name: Decide the fate of the runtime packages
+        id: decide
+        env:
+          ENFORCE: ${{ needs.resolve.outputs.enforce_native_pin }}
+          NATIVES: ${{ steps.natives.outcome }}
+          MANIFEST: ${{ steps.manifest.outcome }}
+          STAGE: ${{ steps.stage.outcome }}
+          TAG: ${{ needs.resolve.outputs.tag }}
         run: |
-          echo "::warning title=Native archives unavailable::No audiocpp-native-*.zip on release '${{ needs.resolve.outputs.tag }}'. Publishing the managed package only. Build and attach the native archives (eng/packaging/make-native-archives.ps1) and re-run to publish AudioCpp.NET.Runtime and AudioCpp.NET.Runtime.Cuda."
+          set -euo pipefail
+          runtime=skipped
+          reason=""
+          if [ "$NATIVES" != "success" ]; then
+            reason="release '$TAG' carries no audiocpp-native-*.zip"
+          elif [ "$MANIFEST" != "success" ]; then
+            reason="release '$TAG' has archives but no audiocpp-native-manifest.json, so their audio.cpp pin cannot be verified"
+          elif [ "$STAGE" = "success" ]; then
+            runtime=staged
+          else
+            reason="the archives on '$TAG' were built for a different audio.cpp commit than eng/upstream.lock.json pins (see the Stage native shims step)"
+          fi
+          echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
+
+          if [ "$runtime" = "skipped" ]; then
+            if [ "$ENFORCE" = "1" ]; then
+              echo "::error title=Refusing to publish::$reason"
+              echo "Rebuild them for the pinned commit (eng/packaging/make-native-archives.ps1),"
+              echo "attach audiocpp-native-*.zip and audiocpp-native-manifest.json to '$TAG', and re-run."
+              echo "Set the strict_natives=false dispatch input to override and publish AudioCpp.NET alone."
+              exit 1
+            fi
+            echo "::warning title=Runtime packages will be skipped::$reason"
+            {
+              echo "### Runtime packages skipped"
+              echo
+              echo "Reason: $reason"
+              echo
+              echo "Only AudioCpp.NET was packed. It carries no native runtime, so consumers"
+              echo "also need AudioCpp.NET.Runtime (CPU) or AudioCpp.NET.Runtime.Cuda (NVIDIA)"
+              echo "from a release whose archives match the pinned audio.cpp commit."
+              echo
+              echo "Fix: run eng/packaging/make-native-archives.ps1 against the pinned checkout,"
+              echo "attach audiocpp-native-*.zip **and** audiocpp-native-manifest.json to '$TAG',"
+              echo "then re-run this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "runtime packages: $runtime${reason:+ ($reason)}"
 
       - name: Pack
+        env:
+          RUNTIME: ${{ steps.decide.outputs.runtime }}
         run: |
           set -euo pipefail
           V="${{ needs.resolve.outputs.version }}"
           mkdir -p packages
           dotnet pack src/AudioCpp.NET/AudioCpp.NET.csproj -c Release -o packages -p:Version="$V"
-          if [ "${{ steps.natives.outcome }}" = "success" ]; then
+          if [ "$RUNTIME" = "staged" ]; then
             dotnet pack src/AudioCpp.NET.Runtime/AudioCpp.NET.Runtime.csproj -c Release -o packages -p:Version="$V"
             dotnet pack src/AudioCpp.NET.Runtime.Cuda/AudioCpp.NET.Runtime.Cuda.csproj -c Release -o packages -p:Version="$V"
           fi
@@ -149,11 +238,11 @@ jobs:
       # so a packaging regression fails here instead of at a consumer's first run.
       - name: Verify package contents
         env:
-          NATIVES_OUTCOME: ${{ steps.natives.outcome }}
+          RUNTIME: ${{ steps.decide.outputs.runtime }}
         run: |
           set -euo pipefail
           mode=skipped
-          [ "$NATIVES_OUTCOME" = "success" ] && mode=staged
+          [ "$RUNTIME" = "staged" ] && mode=staged
           python3 eng/packaging/verify_packages.py packages --natives "$mode"
 
       - uses: actions/upload-artifact@v4
