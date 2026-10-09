@@ -5,10 +5,9 @@
   </PropertyGroup>
 
   <!--
-    win-x64/linux-x64 shims all ship as audiocpp_dotnet_native.dll / .so, so the CPU,
-    CUDA and Vulkan packages collide on the exact same runtimes/<rid>/native path.
-    Restore would resolve that non-deterministically, and the app would load whichever
-    backend happened to win. Fail loudly instead, and say what to do about it.
+    Deliberately the same target name as the CPU and CUDA packages' guard: MSBuild
+    lets a later definition replace an earlier one, so whichever package is imported
+    last still enforces the single-runtime rule, and the bodies are identical anyway.
   -->
   <Target Name="AudioCppRuntimeConflictGuard" BeforeTargets="PrepareForBuild">
     <Error Condition="$(_AudioCppNativeRuntimeCount) &gt; 1"

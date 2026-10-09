@@ -13,8 +13,8 @@ ships in a separate runtime package — reference **exactly one** of:
 | `AudioCpp.NET.Runtime.Cuda` | NVIDIA GPU (CUDA) | `win-x64`, `linux-x64` |
 
 ```xml
-<PackageReference Include="AudioCpp.NET" Version="0.1.0" />
-<PackageReference Include="AudioCpp.NET.Runtime" Version="0.1.0" />
+<PackageReference Include="AudioCpp.NET" Version="0.3.0" />
+<PackageReference Include="AudioCpp.NET.Runtime" Version="0.3.0" />
 ```
 
 The two runtime packages carry the same native file name, so referencing both is a

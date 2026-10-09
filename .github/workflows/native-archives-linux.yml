@@ -33,7 +33,7 @@ on:
         required: true
         default: cpu
         type: choice
-        options: [cpu, cuda]
+        options: [cpu, cuda, vulkan]
 
 permissions:
   contents: write
@@ -94,6 +94,20 @@ jobs:
           echo "nvcc: $NVCC"
           "$NVCC" --version | tail -2
 
+      # Vulkan needs glslc at build time: ggml-vulkan compiles its compute shaders
+      # ahead of the build. The Vulkan *loader* (libvulkan1) is only needed to run the
+      # shim, and the runner has no GPU, so this cell proves the build and the ABI, not
+      # inference -- exactly like the cuda cell above.
+      - name: Install the Vulkan shader compiler
+        if: inputs.backend == 'vulkan'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslc libvulkan-dev
+          glslc --version | head -2
+          pkg-config --modversion vulkan
+
       - name: Configure (full model set)
         shell: bash
         run: |
@@ -110,6 +124,8 @@ jobs:
             # search can miss a versioned install directory.
             ROOT=$(dirname "$(dirname "$NVCC")")
             ARGS+=("-DCUDAToolkit_ROOT=$ROOT")
+          elif [ "${{ inputs.backend }}" = "vulkan" ]; then
+            ARGS+=(-DAUDIOCPP_BACKEND=vulkan)
           else
             ARGS+=(-DAUDIOCPP_BACKEND=cpu)
           fi

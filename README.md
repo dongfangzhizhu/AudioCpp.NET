@@ -5,7 +5,7 @@
 > Status: wraps every model family the pinned engine defines — 74 `model_specs`
 > families produce 74 linked loaders and a 76-entry catalog (74 + 2 built-in VADs),
 > with 217 downloadable packages. Verified on four platform cells:
-> Windows/Linux × CPU/CUDA. See
+> Windows/Linux × CPU/CUDA, plus Windows/Linux × Vulkan. See
 > [`docs/verification/release-readiness.md`](docs/verification/release-readiness.md)
 > for the evidence. The upstream source is pinned; this repository never builds an
 > unreviewed moving `main` branch.
@@ -13,13 +13,14 @@
 ## Install
 
 ```xml
-<PackageReference Include="AudioCpp.NET" Version="0.1.0" />
-<PackageReference Include="AudioCpp.NET.Runtime" Version="0.1.0" />
+<PackageReference Include="AudioCpp.NET" Version="0.3.0" />
+<PackageReference Include="AudioCpp.NET.Runtime" Version="0.3.0" />
 ```
 
 `AudioCpp.NET.Runtime` is the CPU backend. For NVIDIA GPUs use
-`AudioCpp.NET.Runtime.Cuda` instead — reference exactly one, never both, because the
-shims share a file name and the packages fail the build if you reference two.
+`AudioCpp.NET.Runtime.Cuda`; for any Vulkan 1.2+ GPU (NVIDIA, AMD, Intel) use
+`AudioCpp.NET.Runtime.Vulkan`. Reference exactly one of the three, never more, because
+the shims share a file name and the packages fail the build if you reference two.
 
 Model weights are not redistributed (multi-GB, separately licensed). Install them
 with the companion CLI:
@@ -43,7 +44,7 @@ Read [`docs/PLAN.md`](docs/PLAN.md) for architecture, scope, milestones, upgrade
 | --- | --- |
 | `src/AudioCpp.NET` | Managed API (the published `AudioCpp.NET` package) |
 | `src/AudioCpp.NET.Interop` | P/Invoke layer; folded into the managed package, never published alone |
-| `src/AudioCpp.NET.Runtime{,.Cuda}` | Asset-only runtime packages carrying the native shims |
+| `src/AudioCpp.NET.Runtime{,.Cuda,.Vulkan}` | Asset-only runtime packages carrying the native shims |
 | `src/AudioCpp.NET.Console`, `.Web` | Local tooling: CLI and test workbench (not published) |
 | `native/` | The C ABI shim sources, export lists and ABI/e2e probes |
 | `eng/matrix/` | Reproducible build-and-test matrix scripts, plus single-cell debugging tools |
@@ -62,13 +63,13 @@ dotnet test AudioCpp.NET.slnx
 
 ```powershell
 # build the shims first (see "Build native shim"), then:
-powershell -File eng\packaging\pack.ps1 -Version 0.1.0
+powershell -File eng\packaging\pack.ps1 -Version 0.3.0
 ```
 
 `.github/workflows/release.yml` publishes from CI. The managed package is built from
 source; the runtime packages are assembled from `audiocpp-native-*.zip` archives
-attached to the GitHub Release, because a full-set shim (and any CUDA shim) cannot be
-built on a GitHub-hosted runner. Produce those archives with:
+attached to the GitHub Release, because a full-set shim (and any CUDA or Vulkan shim)
+cannot be built on a GitHub-hosted runner. Produce those archives with:
 
 ```powershell
 powershell -File eng\packaging\make-native-archives.ps1
@@ -270,6 +271,30 @@ wsl -d Debian -- bash eng/check-debian-gpu-build.sh
 On MSVC, the global `/utf-8` flag is scoped to C/C++ sources only (`COMPILE_LANG_AND_ID`
 generator expressions) because nvcc parses a bare `/utf-8` as an extra input file and
 aborts CUDA compilation.
+
+### GPU (Vulkan) builds
+
+Set `-DAUDIOCPP_BACKEND=vulkan -DVULKAN_SDK=<sdk>` in the same commands, or use the
+matrix scripts, which locate the SDK themselves:
+
+```powershell
+powershell -File eng\matrix\configure-win.ps1 -Backend vulkan
+powershell -File eng\matrix\build-win.ps1     -Backend vulkan
+# only the vulkan cell of the matrix:
+powershell -File eng\matrix\win-full-matrix.ps1 -Backends vulkan -Configure
+```
+
+The SDK is a **build-time** requirement, not a runtime one: `ggml-vulkan` compiles its
+compute shaders with `glslc` before linking, so
+`find_package(Vulkan COMPONENTS glslc REQUIRED)` fails the configure without it. At run
+time only the loader is needed (`vulkan-1.dll` / `libvulkan.so.1`), and that comes with
+the graphics driver — which is why this backend runs on any Vulkan 1.2+ GPU (NVIDIA,
+AMD, Intel) without shipping a vendor runtime.
+
+SDK lookup order in the scripts: `AUDIOCPP_VULKAN_SDK`, then `VULKAN_SDK`, then the
+newest version under `C:\VulkanSDK`, `%LOCALAPPDATA%\Programs\VulkanSDK` or
+`C:\Program Files\VulkanSDK`. On Debian/WSL, `apt-get install glslc libvulkan-dev` is
+enough.
 
 ## Troubleshooting
 

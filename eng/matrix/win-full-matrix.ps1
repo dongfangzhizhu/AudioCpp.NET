@@ -1,5 +1,8 @@
 ﻿# Windows full-set matrix: configure (optional) + build + smoke + real-inference e2e
-# + managed tests, for BOTH backends, with AUDIOCPP_MODEL_SET=full.
+# + managed tests, for every backend given in -Backends, with AUDIOCPP_MODEL_SET=full.
+#
+# The vulkan cell needs the Vulkan SDK (glslc) and a Vulkan 1.2+ GPU; the CPU and CUDA
+# cells need what they always needed. Omit a backend with -Backends to skip its cell.
 #
 # Mirrors eng/matrix/linux-full-matrix.sh so the two OS halves of the test matrix
 # are produced by equivalent, reproducible scripts rather than ad-hoc commands.
@@ -22,10 +25,12 @@
 #   powershell -File eng\matrix\win-full-matrix.ps1 -Configure      # reconfigure first
 #   powershell -File eng\matrix\win-full-matrix.ps1 -Backends cpu
 param(
-    [string[]]$Backends = @("cpu", "cuda"),
+    [string[]]$Backends = @("cpu", "cuda", "vulkan"),
     [switch]$Configure,
     [int]$CpuJobs = 24,
     [int]$CudaJobs = 6,
+    # Vulkan compiles with plain MSVC (no nvcc), so it uses the CPU job count.
+    [int]$VulkanJobs = 16,
     [string]$FixtureSource = ""
 )
 
@@ -67,6 +72,33 @@ function Mark-Failed([string]$name) {
     $script:failed++
 }
 
+# Where the Vulkan SDK lives. The installer sets VULKAN_SDK per machine, so prefer it
+# and only probe the default install locations when it is missing. ggml-vulkan needs
+# glslc (the SDK's shader compiler) at build time, not just the loader at run time:
+# find_package(Vulkan COMPONENTS glslc REQUIRED) fails the configure without it.
+function Resolve-VulkanSdk {
+    if ($env:AUDIOCPP_VULKAN_SDK) {
+        if (Test-Path (Join-Path $env:AUDIOCPP_VULKAN_SDK "Bin\glslc.exe")) { return $env:AUDIOCPP_VULKAN_SDK }
+        Write-Output "WARN: AUDIOCPP_VULKAN_SDK=$env:AUDIOCPP_VULKAN_SDK has no Bin\glslc.exe; ignoring it."
+    }
+    $candidates = @()
+    if ($env:VULKAN_SDK) { $candidates += $env:VULKAN_SDK }
+    foreach ($root in @("C:\VulkanSDK", "$env:LOCALAPPDATA\Programs\VulkanSDK", "C:\Program Files\VulkanSDK")) {
+        if (Test-Path $root) {
+            # Newest first: the SDK versions its own directory names (1.3.290.0).
+            $candidates += (Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                Sort-Object Name -Descending | ForEach-Object { $_.FullName })
+        }
+    }
+    foreach ($candidate in $candidates) {
+        if (Test-Path (Join-Path $candidate "Bin\glslc.exe")) {
+            Write-Output "vulkan sdk: $candidate (glslc found)"
+            return $candidate
+        }
+    }
+    return $null
+}
+
 # --- fixtures -----------------------------------------------------------------
 Write-Step "fixtures"
 if ([string]::IsNullOrWhiteSpace($FixtureSource)) {
@@ -100,6 +132,21 @@ if ($missing -gt 0) {
 Write-Output "cmake : $((& cmake --version | Select-Object -First 1))"
 Write-Output "dotnet: $((& dotnet --version))"
 
+# Resolved once: the Vulkan path is needed by configure and its absence should stop
+# the matrix before it spends an hour compiling, not after.
+$vulkanSdk = Resolve-VulkanSdk
+if ($Backends -contains "vulkan") {
+    if (-not $vulkanSdk) {
+        Write-Output "FATAL: backend 'vulkan' needs the Vulkan SDK for glslc (the shader compiler)."
+        Write-Output "       Install it from https://vulkan.lunarg.com/sdk/home (the SDK-only"
+        Write-Output "       installer is enough; the runtime already ships with the GPU driver),"
+        Write-Output "       or set AUDIOCPP_VULKAN_SDK to an existing install. Re-run with"
+        Write-Output "       -Backends cpu,cuda to skip this backend."
+        exit 2
+    }
+    Write-Output "vulkan : $vulkanSdk"
+}
+
 # --- per-backend matrix -------------------------------------------------------
 foreach ($backend in $Backends) {
     $out = "$A\matrix-out\win-$backend"
@@ -128,6 +175,18 @@ foreach ($backend in $Backends) {
             $cmakeArgs += "-DCUDAToolkit_ROOT=C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3"
             $cmakeArgs += "-DCMAKE_CUDA_ARCHITECTURES=89"
         }
+        elseif ($backend -eq "vulkan") {
+            # VULKAN_SDK on its own does not satisfy ggml-vulkan: CMake's FindVulkan
+            # ignores it (4.4 reports it as an unused variable) and only looks for
+            # glslc in a layout the SDK installer never writes. Name the three pieces
+            # the `find_package(Vulkan COMPONENTS glslc REQUIRED)` actually asks for.
+            $cmakeArgs += "-DVulkan_INCLUDE_DIR=$vulkanSdk\Include"
+            $cmakeArgs += "-DVulkan_LIBRARY=$vulkanSdk\Lib\vulkan-1.lib"
+            $cmakeArgs += "-DVulkan_GLSLC_EXECUTABLE=$vulkanSdk\Bin\glslc.exe"
+            $env:INCLUDE = "$vulkanSdk\Include;$env:INCLUDE"
+            $env:LIB     = "$vulkanSdk\Lib;$env:LIB"
+            $env:PATH    = "$vulkanSdk\Bin;$env:PATH"
+        }
         & cmake @cmakeArgs *> "$A\configure-win-full-$backend.log"
         if ($LASTEXITCODE -ne 0) {
             Mark-Failed "configure-$backend"
@@ -143,7 +202,11 @@ foreach ($backend in $Backends) {
     Write-Output "loaders: $loaders"
 
     Write-Step "build $backend"
-    $jobs = if ($backend -eq "cuda") { $CudaJobs } else { $CpuJobs }
+    $jobs = switch ($backend) {
+        "cuda"   { $CudaJobs }
+        "vulkan" { $VulkanJobs }
+        default  { $CpuJobs }
+    }
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     & cmake --build $bd --parallel $jobs `
         --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke audiocpp_dotnet_e2e `

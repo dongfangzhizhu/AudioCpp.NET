@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Native-only asset package for the Vulkan backend. See AudioCpp.NET.Runtime.csproj:
+    identical shape, different staged binaries.
+
+    Two properties make this backend cheaper to ship than CUDA:
+      * the shaders are precompiled at build time by glslc (from the Vulkan SDK), so
+        no GPU compute runtime ships inside the package;
+      * the Vulkan loader itself (vulkan-1.dll / libvulkan.so.1) comes from the
+        graphics driver, so this package carries only the shim, exactly like the CPU
+        one. Nothing driver-specific is redistributed here.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+
+    <PackageId>AudioCpp.NET.Runtime.Vulkan</PackageId>
+    <Description>Native audio.cpp shim (Vulkan backend) for AudioCpp.NET. Adds runtimes/win-x64 and runtimes/linux-x64 native libraries running on any Vulkan 1.2 capable GPU (NVIDIA, AMD, Intel) through the Vulkan compute API. Reference AudioCpp.NET plus exactly one runtime package.</Description>
+    <PackageReadmeFile>README-runtime.md</PackageReadmeFile>
+
+    <NoWarn>$(NoWarn);NU5128;NU5100</NoWarn>
+
+    <!-- See AudioCpp.NET.Runtime.csproj: asset-only packages ship no symbols. -->
+    <IncludeSymbols>false</IncludeSymbols>
+    <SymbolPackageFormat></SymbolPackageFormat>
+
+    <AudioCppShimDir Condition="'$(AudioCppShimDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\nuget-staging\vulkan</AudioCppShimDir>
+    <!-- See AudioCpp.NET.Runtime.csproj: inferred from what is staged, not hardcoded. -->
+    <AudioCppRuntimeRids Condition="'$(AudioCppRuntimeRids)' == ''"></AudioCppRuntimeRids>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll"
+          Pack="true" PackagePath="runtimes/win-x64/native/"
+          Condition="Exists('$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll')" />
+    <None Include="$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so"
+          Pack="true" PackagePath="runtimes/linux-x64/native/"
+          Condition="Exists('$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so')" />
+
+    <None Include="buildTransitive\AudioCpp.NET.Runtime.Vulkan.props" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="buildTransitive\AudioCpp.NET.Runtime.Vulkan.targets" Pack="true" PackagePath="buildTransitive/" />
+    <None Include="..\..\docs\nuget\README-runtime.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <Import Project="..\..\eng\packaging\ShimStagingCheck.targets" />
+
+</Project>

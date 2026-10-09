@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Linux full-set matrix: configure + build + smoke + real-inference e2e + managed
-# tests for BOTH backends, using AUDIOCPP_MODEL_SET=full (all 71 model targets).
+# tests for every backend in the loop below (cpu, cuda, vulkan), using
+# AUDIOCPP_MODEL_SET=full (all 71 model targets).
 #
 # Mirrors eng/matrix/win-full-matrix.ps1 so the two OS halves of the test matrix are
 # produced by equivalent, reproducible scripts rather than ad-hoc commands.
@@ -104,7 +105,7 @@ echo "boringssl cached: $(ls "$M/deps/boringssl-src" | wc -l) entries"
 
 cd "$M/audiocpp-dotnet"
 
-for BACK in cpu cuda; do
+for BACK in cpu cuda vulkan; do
   OUT="$A/matrix-out/linux-$BACK"; mkdir -p "$OUT"
   BD="$M/build-linux-$BACK"
   LOG="$A/build-linux-full-$BACK.log"
@@ -112,6 +113,21 @@ for BACK in cpu cuda; do
   EXTRA=(-DFETCHCONTENT_SOURCE_DIR_AUDIOCPP_BORINGSSL="$M/deps/boringssl-src")
   if [ "$BACK" = cuda ]; then
     EXTRA+=(-DCUDAToolkit_ROOT=/usr/local/cuda -DCMAKE_CUDA_ARCHITECTURES=89 -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc)
+  elif [ "$BACK" = vulkan ]; then
+    # ggml-vulkan compiles shaders at build time, so glslc must exist. On Debian/Ubuntu
+    # that is the `glslc` or `glslang-tools` package; the loader itself (libvulkan1) only
+    # matters at run time. Fail this cell loudly instead of the whole matrix.
+    GLSLC=$(command -v glslc || true)
+    if [ -z "$GLSLC" ]; then
+      echo "FATAL: backend 'vulkan' needs glslc. Install it with:"
+      echo "         apt-get install -y glslc   (or: glslang-tools)"
+      echo "      Alternatively point VULKAN_SDK at a LunarG SDK unpacked under $M."
+      exit 2
+    fi
+    echo "glslc: $GLSLC"
+    if [ -n "${VULKAN_SDK:-}" ]; then
+      EXTRA+=(-DVULKAN_SDK="$VULKAN_SDK")
+    fi
   fi
 
   step "configure $BACK (full set)"
