@@ -314,22 +314,27 @@ jobs:
     if: needs.resolve.outputs.publish == 'true'
     runs-on: ubuntu-latest
     # Trusted publishing (OIDC) instead of a stored API key: nuget.org trusts this
-    # repository, this workflow and this environment, and exchanges a short-lived
-    # token for a push token. There is no long-lived secret to leak or rotate, and a
-    # fork pull request cannot obtain one.
+    # repository, this workflow and this environment, and exchanges the token for a
+    # one-hour push key. There is no long-lived secret to leak or rotate, and a fork
+    # pull request cannot obtain one.
+    #
+    # IMPORTANT: `dotnet nuget push` has NO built-in OIDC exchange (verified against
+    # the .NET 10 CLI docs and learn.microsoft.com/nuget/nuget-org/trusted-publishing).
+    # The official flow is the NuGet/login@v1 action: it mints an OIDC token
+    # (audience https://www.nuget.org), posts it to nuget.org's token endpoint and
+    # exposes the temporary API key as an output. The push step then sends that key
+    # like any other.
     #
     # `environment` is part of the trust relationship configured on nuget.org, so it
-    # has to match that entry exactly; `id-token: write` is what lets the SDK request
-    # the OIDC token in the first place. Both are required -- dropping either fails the
-    # exchange at push time with an opaque 401 rather than a configuration error.
+    # has to match that entry exactly; `id-token: write` is what lets the login step
+    # request the OIDC token in the first place. Both are required.
     environment: release
     permissions:
       contents: read
       id-token: write
     steps:
-      # Not just for the packages: `dotnet nuget push` performs the OIDC exchange, and
-      # that support landed in the .NET 8.0.4xx/9.x SDKs. A hosted runner's default
-      # SDK is older than that, so the version is pinned rather than assumed.
+      # The push itself needs a dotnet SDK; the OIDC exchange lives in the
+      # NuGet/login action, not in the CLI.
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -342,16 +347,10 @@ jobs:
       # --skip-duplicate keeps a re-run idempotent: a partially published release can
       # be retried without failing on the packages that already landed.
       #
-      # No --api-key: under trusted publishing the SDK reads ACTIONS_ID_TOKEN_REQUEST_*
-      # from the environment and exchanges it at the source. Passing an empty
-      # --api-key would switch NuGet back to anonymous auth and every push would 401,
-      # so the flag is omitted rather than parameterised.
-      # nuget.org matches its trusted publisher against the OIDC token's claims, not
-      # against anything we send separately: repository, workflow and environment must
-      # each equal what the publisher entry says. `dotnet nuget push` never shows that
-      # token, so a mismatch is only visible as the anonymous-fallback 401. Decode the
-      # token's payload here (claims only -- the JWT itself is masked, not printed) so
-      # the three fields can be compared against the nuget.org entry line by line.
+      # The probe below decodes the OIDC token payload (claims only -- the JWT itself
+      # is masked, not printed) so the trust fields can be compared against the
+      # nuget.org publisher entry line by line. A mismatch surfaces at the login step
+      # as "No matching trust policy", but the probe shows WHICH claim is off.
       # NOTE: the decode helper must stay a ONE-LINE python -c. A multi-line one would
       # put unindented lines inside this `run: |` block, which terminates the block
       # scalar and rips the workflow_dispatch trigger out of the parsed document
@@ -364,34 +363,44 @@ jobs:
             echo "::error::no OIDC request credentials in the environment -- the job lacks 'permissions: id-token: write'"
             exit 1
           fi
-          RESP=$(curl -sS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=nuget.org" -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          RESP=$(curl -sS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=https%3A%2F%2Fwww.nuget.org" -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
           JWT=$(printf '%s' "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))")
           if [ -z "$JWT" ]; then
             echo "::error::no OIDC token returned: $(printf '%s' "$RESP" | head -c 200)"
             exit 1
           fi
-          echo "OIDC token claims (audience nuget.org):"
+          echo "OIDC token claims (audience https://www.nuget.org):"
           printf '%s' "$JWT" | cut -d. -f2 | tr '_-' '/+' | python3 -c "import sys,base64,json; p=sys.stdin.read().strip(); p+='='*(-len(p)%4); c=json.loads(base64.b64decode(p)); [print('  %-20s' % k, c.get(k, '<absent>')) for k in ('iss','aud','sub','repository','repository_owner','workflow','job_workflow_ref','ref','environment','environment_ref','run_id','actor')]"
+
+      # Exchanges the job's OIDC token for a one-hour NuGet API key. The `user` is the
+      # nuget.org profile name (package owner), which is public information; no
+      # secret is involved. This is the OFFICIAL trusted-publishing flow -- the dotnet
+      # CLI cannot do this exchange by itself.
+      - name: NuGet login (OIDC to temporary API key)
+        id: nuget-login
+        uses: NuGet/login@v1
+        with:
+          user: wenlee
 
       - name: Push packages
         run: |
           set -euo pipefail
           dotnet nuget push "packages/*.nupkg" \
+            --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
             --source https://api.nuget.org/v3/index.json \
             --skip-duplicate
           for s in packages/*.snupkg; do
             [ -e "$s" ] || continue
             dotnet nuget push "$s" \
+              --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" \
               --source https://api.nuget.org/v3/index.json \
               --skip-duplicate
           done
 
-      # `dotnet nuget push` tries OIDC exactly once and, when that fails, silently
-      # falls back to a stored API key -- so a trusted-publishing misconfiguration
-      # surfaces only as "401 ... X-NuGet-ApiKey", which reads like a missing secret
-      # rather than a rejected trust relationship. Exchanging the token by hand makes
-      # the real reason (unknown repository, wrong workflow filename, wrong environment,
-      # expired 7-day grant) visible in the log, where it can be acted on.
+      # The NuGet/login step prints the token exchange's real error ("No matching
+      # trust policy owned by user ... was found"), so a trusted-publishing
+      # misconfiguration no longer hides behind the anonymous-fallback 401. The step
+      # below restates the local side of the trust relationship for quick diffing.
       - name: Explain a push failure
         if: failure()
         run: |
@@ -404,10 +413,10 @@ jobs:
           echo
           echo "On nuget.org the trusted publisher must match all three of those."
           echo "Common causes, in the order they are usually hit:"
-          echo "  1. The grant is the 7-day trial and has expired -- reactivate it on the"
-          echo "     package's Trusted Publisher page."
-          echo "  2. The publisher is attached to a different package than the one being"
-          echo "     pushed. It is configured per package, not per repository."
+          echo "  1. The grant is the 7-day trial and has expired -- reactivate it on"
+          echo "     nuget.org (Trusted Publishing page; the window restarts on demand)."
+          echo "  2. The publisher entry's scopes do not cover the package being pushed"
+          echo "     (the entry is account-level; its glob pattern must match the IDs)."
           echo "  3. The workflow filename or environment does not match exactly."
           echo "  4. A newly pushed version is reserved by someone else; --skip-duplicate"
           echo "     only skips versions already on the feed."
