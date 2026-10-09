@@ -365,6 +365,10 @@ jobs:
       # token, so a mismatch is only visible as the anonymous-fallback 401. Decode the
       # token's payload here (claims only -- the JWT itself is masked, not printed) so
       # the three fields can be compared against the nuget.org entry line by line.
+      # NOTE: the decode helper must stay a ONE-LINE python -c. A multi-line one would
+      # put unindented lines inside this `run: |` block, which terminates the block
+      # scalar and rips the workflow_dispatch trigger out of the parsed document
+      # (manifested as "Workflow does not have 'workflow_dispatch' trigger" on dispatch).
       - name: Probe the OIDC token
         run: |
           set -euo pipefail
@@ -373,22 +377,14 @@ jobs:
             echo "::error::no OIDC request credentials in the environment -- the job lacks 'permissions: id-token: write'"
             exit 1
           fi
-          RESP=$(curl -sS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=nuget.org" \
-            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+          RESP=$(curl -sS "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=nuget.org" -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN")
           JWT=$(printf '%s' "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('value',''))")
           if [ -z "$JWT" ]; then
             echo "::error::no OIDC token returned: $(printf '%s' "$RESP" | head -c 200)"
             exit 1
           fi
           echo "OIDC token claims (audience nuget.org):"
-          printf '%s' "$JWT" | cut -d. -f2 | tr '_-' '/+' \
-            | python3 -c "
-import sys,base64,json
-p=sys.stdin.read().strip()
-p+='='*(-len(p)%4)
-c=json.loads(base64.b64decode(p))
-for k in ('iss','aud','sub','repository','repository_owner','workflow','job_workflow_ref','ref','environment','environment_ref','run_id','actor'):
-    print(f'  {k:20s} {c.get(k, \"<absent>\")}')"
+          printf '%s' "$JWT" | cut -d. -f2 | tr '_-' '/+' | python3 -c "import sys,base64,json; p=sys.stdin.read().strip(); p+='='*(-len(p)%4); c=json.loads(base64.b64decode(p)); [print('  %-20s' % k, c.get(k, '<absent>')) for k in ('iss','aud','sub','repository','repository_owner','workflow','job_workflow_ref','ref','environment','environment_ref','run_id','actor')]"
 
       # `dotnet nuget push` tries OIDC exactly once and, when that fails, silently
       # falls back to a stored API key -- so a trusted-publishing misconfiguration
