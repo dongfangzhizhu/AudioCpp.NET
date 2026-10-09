@@ -177,6 +177,10 @@ jobs:
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
           echo "bytes=$(stat -c%s "$OUT")" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$OUT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          # The library hash too: the manifest records both, so a consumer (or the
+          # release job) can tell a renamed archive from a rebuilt one.
+          echo "lib_bytes=$(stat -c%s "build/native-ci/$LIB")" >> "$GITHUB_OUTPUT"
+          echo "lib_sha256=$(sha256sum "build/native-ci/$LIB" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "$OUT: $(stat -c%s "$OUT") bytes  sha256=$(sha256sum "$OUT" | cut -d' ' -f1)"
 
       - uses: actions/upload-artifact@v4
@@ -197,14 +201,76 @@ jobs:
           set -euo pipefail
           TAG="${{ inputs.tag }}"
           FILE="audiocpp-native-linux-x64-${{ inputs.backend }}.zip"
-          # A tag with no release yet gets one; an existing release is reused. --clobber
-          # makes a re-run after a code change replace the stale archive.
+          MANIFEST=audiocpp-native-manifest.json
           if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # --draft, deliberately: the tag only exists once the release is published,
+            # and publishing it is what fires the tag-push that runs release.yml. A
+            # release created as published would start the nuget release before the
+            # Windows archives and the manifest are attached, and the strict pin gate
+            # would (correctly) refuse it.
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" --generate-notes --draft
           fi
+
+          # Merge into the manifest rather than leaving the archive unregistered.
+          # audiocpp-native-manifest.json is the record of which pin every binary on the
+          # release was built from; an archive the manifest does not mention has no
+          # recorded provenance, and the release job's pin check only proves the pin of
+          # what it *can* see. The Windows entries are written locally by
+          # eng/packaging/make-native-archives.ps1, so merge onto whatever is already
+          # there and re-upload. Re-running for the other backend then adds to it
+          # instead of dropping the first one's entry.
+          WORK=$(mktemp -d)
+          if gh release download "$TAG" --pattern "$MANIFEST" --dir "$WORK" \
+               --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "merging into the manifest already on $TAG"
+          else
+            SHA=$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' eng/upstream.lock.json | head -1)
+            URL=$(sed -n 's/.*"repository": *"\([^"]*\)".*/\1/p' eng/upstream.lock.json | head -1)
+            MAJ=$(python3 -c 'import json;print(json.load(open("eng/upstream.lock.json"))["shimAbi"]["major"])')
+            MIN=$(python3 -c 'import json;print(json.load(open("eng/upstream.lock.json"))["shimAbi"]["minor"])')
+            printf '{"schemaVersion":1,"audioCppCommit":"%s","audioCppRepository":"%s","shimAbiMajor":%s,"shimAbiMinor":%s,"backendModelSet":"full","builtAtUtc":"%s","archives":[]}\n' \
+              "$SHA" "$URL" "$MAJ" "$MIN" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$WORK/$MANIFEST"
+            echo "no manifest on $TAG yet; starting one from eng/upstream.lock.json"
+          fi
+
+          python3 - "$WORK/$MANIFEST" "${{ inputs.backend }}" \
+            "${{ steps.pack.outputs.lib_bytes }}" "${{ steps.pack.outputs.lib_sha256 }}" \
+            "${{ steps.pack.outputs.sha256 }}" "${{ steps.pack.outputs.bytes }}" <<'PY'
+          import json, sys, pathlib
+          # Merge this backend's entry into the manifest, replacing any earlier entry
+          # for the same rid+backend so a re-run supersedes its own stale record.
+          manifest_path, backend = sys.argv[1], sys.argv[2]
+          rid = "linux-x64"
+          manifest = json.loads(pathlib.Path(manifest_path).read_text(encoding="utf-8"))
+          entries = [e for e in manifest.get("archives", [])
+                     if not (e.get("rid") == rid and e.get("backend") == backend)]
+          entries.append({
+              "rid": rid,
+              "backend": backend,
+              "archive": f"audiocpp-native-{rid}-{backend}.zip",
+              "library": "libaudiocpp_dotnet_native.so",
+              "library_bytes": int(sys.argv[3]),
+              "library_sha256": sys.argv[4],
+              "archive_sha256": sys.argv[5],
+              "archive_bytes": int(sys.argv[6]),
+          })
+          entries.sort(key=lambda e: (e["backend"], e["rid"]))
+          manifest["archives"] = entries
+          pathlib.Path(manifest_path).write_text(
+              json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          print(f"manifest now lists {len(entries)} archive(s): "
+                + ", ".join(f'{e["rid"]}/{e["backend"]}' for e in entries))
+          PY
+
           gh release upload "$TAG" "$FILE" --clobber --repo "$GITHUB_REPOSITORY"
-          echo "attached $FILE to $TAG"
+          # --clobber cannot overwrite a *different* asset with the same name when the
+          # release was created before this manifest existed, so delete-then-upload.
+          gh release delete-asset "$TAG" "$MANIFEST" --repo "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
+          gh release upload "$TAG" "$WORK/$MANIFEST" --repo "$GITHUB_REPOSITORY"
+          rm -rf "$WORK"
+
+          echo "attached $FILE to $TAG (manifest updated)"
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq '.assets[] | "\(.name)  \(.size) B"'
 
