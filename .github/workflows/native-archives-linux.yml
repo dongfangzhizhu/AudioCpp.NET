@@ -192,6 +192,13 @@ jobs:
       # Attaching to the release is what release.yml consumes. Upload separately from
       # the artifact step so a tag that already has the file from a previous run is
       # replaced rather than causing a duplicate-asset conflict that fails the job.
+      #
+      # The release normally stays a DRAFT until every archive is on it, and a draft is
+      # invisible to `gh release view <tag>` -- that resolves a tag through an endpoint
+      # which 404s on drafts. A `view || create` fallback would therefore create a
+      # *second* Release with the same tag instead of adding to the one already holding
+      # the Windows archives. Look it up through the list endpoint, which does include
+      # drafts.
       - name: Attach the archive to the release
         if: inputs.tag != ''
         shell: bash
@@ -202,15 +209,30 @@ jobs:
           TAG="${{ inputs.tag }}"
           FILE="audiocpp-native-linux-x64-${{ inputs.backend }}.zip"
           MANIFEST=audiocpp-native-manifest.json
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            # --draft, deliberately: the tag only exists once the release is published,
-            # and publishing it is what fires the tag-push that runs release.yml. A
-            # release created as published would start the nuget release before the
-            # Windows archives and the manifest are attached, and the strict pin gate
-            # would (correctly) refuse it.
+
+          # --jq on the list endpoint: the only one that sees drafts.
+          find_release_id() {
+            gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1
+          }
+          find_asset_id() {
+            gh api "repos/$GITHUB_REPOSITORY/releases/$1/assets?per_page=100" \
+              --jq ".[] | select(.name == \"$MANIFEST\") | .id" | head -1
+          }
+
+          RELEASE_ID=$(find_release_id)
+          if [ -z "$RELEASE_ID" ]; then
+            # No release yet: create one as a draft. --draft, deliberately -- the tag
+            # only exists once the release is published, and publishing it is what fires
+            # the tag-push that runs release.yml. A release created as published would
+            # start the nuget release before the Windows archives and the manifest are
+            # attached, and the strict pin gate would (correctly) refuse it.
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "$TAG" --generate-notes --draft
+            RELEASE_ID=$(find_release_id)
           fi
+          test -n "$RELEASE_ID" || { echo "could not find or create a release for $TAG" >&2; exit 1; }
+          echo "using release $RELEASE_ID for $TAG"
 
           # Merge into the manifest rather than leaving the archive unregistered.
           # audiocpp-native-manifest.json is the record of which pin every binary on the
@@ -221,8 +243,13 @@ jobs:
           # there and re-upload. Re-running for the other backend then adds to it
           # instead of dropping the first one's entry.
           WORK=$(mktemp -d)
-          if gh release download "$TAG" --pattern "$MANIFEST" --dir "$WORK" \
-               --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          MANIFEST_ID=$(find_asset_id "$RELEASE_ID")
+          if [ -n "$MANIFEST_ID" ]; then
+            # Downloaded through the asset API rather than `gh release download`, for the
+            # same reason the release is looked up through the list endpoint: the tag-based
+            # helpers do not see drafts.
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$MANIFEST_ID" \
+              -H "Accept: application/octet-stream" > "$WORK/$MANIFEST"
             echo "merging into the manifest already on $TAG"
           else
             SHA=$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' eng/upstream.lock.json | head -1)
@@ -263,16 +290,35 @@ jobs:
                 + ", ".join(f'{e["rid"]}/{e["backend"]}' for e in entries))
           PY
 
-          gh release upload "$TAG" "$FILE" --clobber --repo "$GITHUB_REPOSITORY"
-          # --clobber cannot overwrite a *different* asset with the same name when the
-          # release was created before this manifest existed, so delete-then-upload.
-          gh release delete-asset "$TAG" "$MANIFEST" --repo "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
-          gh release upload "$TAG" "$WORK/$MANIFEST" --repo "$GITHUB_REPOSITORY"
+          # Uploaded by asset id against the release we resolved above. `gh release
+          # upload --clobber` resolves the release by tag, which does not find a draft,
+          # and --clobber cannot replace an asset in any case: a re-run has to delete
+          # first, which is what the ids are for.
+          upload_asset() {
+            local path="$1" name ctype; name=$(basename "$path")
+            case "$name" in
+              *.json) ctype=application/json ;;
+              *) ctype=application/zip ;;
+            esac
+            local old; old=$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" \
+              --jq ".[] | select(.name == \"$name\") | .id" | head -1)
+            if [ -n "$old" ]; then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old" >/dev/null
+              echo "  replaced existing $name"
+            fi
+            gh api --method POST \
+              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name" \
+              --header "Content-Type: $ctype" \
+              --input "$path" >/dev/null
+            echo "  uploaded $name ($(stat -c%s "$path") B)"
+          }
+          upload_asset "$FILE"
+          upload_asset "$WORK/$MANIFEST"
           rm -rf "$WORK"
 
           echo "attached $FILE to $TAG (manifest updated)"
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-            --jq '.assets[] | "\(.name)  \(.size) B"'
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" \
+            --jq '.[] | "\(.name)  \(.size) B"'
 
       - name: Summary
         shell: bash
