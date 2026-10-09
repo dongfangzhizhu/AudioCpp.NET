@@ -450,8 +450,9 @@ def main() -> int:
     if args.push:
         git_push(repo_dir, f"{args.branch}:{args.branch}", token, slug)
 
-    # Secret 必须最先写：release.yml 的 publish 任务在缺 NUGET_API_KEY 时是硬失败
-    # （直接 exit 1），晚于标签触发就白跑一次。
+    # 发布凭据由 nuget.org 的信任发布（OIDC）提供：仓库里不存 NUGET_API_KEY，
+    # publish 任务靠 job 级 environment=release + id-token: write 换短期令牌。
+    # 所以这里不再有"必须最先写 secret"的顺序要求——没有 secret 可写。
     for spec in args.set_secret:
         if "=" in spec:
             k, v = spec.split("=", 1)
