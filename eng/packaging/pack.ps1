@@ -34,6 +34,26 @@ foreach ($backend in $Backends) {
     $projects += "$repo\src\$name\$name.csproj"
 }
 
+# Which RIDs actually got staged, so the check below asserts the real set: a partial
+# release (e.g. the Linux shim was not built) packages its own contents and reports
+# them, instead of failing on a RID that was never going to arrive.
+$staging = "$repo\build\nuget-staging"
+$rids = @()
+foreach ($backend in $Backends) {
+    foreach ($rid in @("win-x64", "linux-x64")) {
+        $lib = if ($rid -eq "win-x64") { "audiocpp_dotnet_native.dll" } else { "libaudiocpp_dotnet_native.so" }
+        if (Test-Path "$staging\$backend\$rid\$lib") { $rids += $rid }
+    }
+}
+$rids = @($rids | Select-Object -Unique)
+if ($rids.Count -eq 0) {
+    Write-Output "FATAL: no native shim staged under build\nuget-staging -- nothing to package."
+    exit 2
+}
+if ($rids.Count -lt 2) {
+    Write-Output "NOTE: only [$($rids -join ', ')] staged; the runtime packages will cover just that platform."
+}
+
 foreach ($project in $projects) {
     $name = (Get-Item $project).Directory.Name
     Write-Output ""
@@ -56,7 +76,7 @@ if (-not $python) {
     Write-Output "!!! python not found on PATH; skipping package verification"
     $failed++
 } else {
-    & $python "$repo\eng\packaging\verify_packages.py" $OutputDir --natives staged
+    & $python "$repo\eng\packaging\verify_packages.py" $OutputDir --natives staged --rids $rids
     if ($LASTEXITCODE -ne 0) { Write-Output "!!! PACKAGE VERIFICATION FAILED (exit $LASTEXITCODE)"; $failed++ }
 }
 

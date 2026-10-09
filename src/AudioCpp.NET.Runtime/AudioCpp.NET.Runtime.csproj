@@ -34,7 +34,13 @@
     <SymbolPackageFormat></SymbolPackageFormat>
 
     <AudioCppShimDir Condition="'$(AudioCppShimDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\nuget-staging\cpu</AudioCppShimDir>
-    <AudioCppRuntimeRids>win-x64;linux-x64</AudioCppRuntimeRids>
+    <!--
+      Left empty on purpose: ShimStagingCheck.targets fills it in from the RIDs actually
+      staged. Declaring "win-x64;linux-x64" here instead would fail the pack whenever a
+      release legitimately carries only one of the two (e.g. the Linux shim could not be
+      produced). Pass -p:AudioCppRuntimeRids=... to hold a release to a fixed set.
+    -->
+    <AudioCppRuntimeRids Condition="'$(AudioCppRuntimeRids)' == ''"></AudioCppRuntimeRids>
   </PropertyGroup>
 
   <ItemGroup>

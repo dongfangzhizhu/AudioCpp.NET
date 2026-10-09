@@ -194,6 +194,18 @@ jobs:
           fi
           echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
 
+          # Which RIDs actually landed, so the package check asserts the real set
+          # instead of assuming both. A release carrying only the Windows archives
+          # is legitimate while the Linux shim is unavailable; what must never happen
+          # is a package that contains a RID nobody staged for this release.
+          rids=""
+          for rid in win-x64 linux-x64; do
+            if compgen -G "build/nuget-staging/*/$rid/*" > /dev/null; then
+              rids="${rids:+$rids,}$rid"
+            fi
+          done
+          echo "rids=$rids" >> "$GITHUB_OUTPUT"
+
           if [ "$runtime" = "skipped" ]; then
             if [ "$ENFORCE" = "1" ]; then
               echo "::error title=Refusing to publish::$reason"
@@ -218,6 +230,18 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "runtime packages: $runtime${reason:+ ($reason)}"
+          if [ "$runtime" = "staged" ] && [ "$rids" != "win-x64,linux-x64" ]; then
+            echo "::warning title=Partial RID coverage::this release carries [$rids], not both platforms"
+            {
+              echo "### Partial RID coverage"
+              echo
+              echo "Staged RIDs: \`$rids\`"
+              echo
+              echo "The runtime packages contain only these platforms. Consumers on the"
+              echo "other platform get a DllNotFoundException on first use, not at install"
+              echo "time. Build the missing archive and re-run to cover both."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Pack
         env:
@@ -239,11 +263,15 @@ jobs:
       - name: Verify package contents
         env:
           RUNTIME: ${{ steps.decide.outputs.runtime }}
+          RIDS: ${{ steps.decide.outputs.rids }}
         run: |
           set -euo pipefail
           mode=skipped
-          [ "$RUNTIME" = "staged" ] && mode=staged
-          python3 eng/packaging/verify_packages.py packages --natives "$mode"
+          if [ "$RUNTIME" = "staged" ]; then
+            mode=staged
+            echo "staged RIDs: ${RIDS:-<none>}"
+          fi
+          python3 eng/packaging/verify_packages.py packages --natives "$mode" --rids "${RIDS:-win-x64,linux-x64}"
 
       - uses: actions/upload-artifact@v4
         with:

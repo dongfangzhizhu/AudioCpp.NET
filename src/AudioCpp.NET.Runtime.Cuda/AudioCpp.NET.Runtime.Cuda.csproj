@@ -22,7 +22,8 @@
     <SymbolPackageFormat></SymbolPackageFormat>
 
     <AudioCppShimDir Condition="'$(AudioCppShimDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\nuget-staging\cuda</AudioCppShimDir>
-    <AudioCppRuntimeRids>win-x64;linux-x64</AudioCppRuntimeRids>
+    <!-- See AudioCpp.NET.Runtime.csproj: inferred from what is staged, not hardcoded. -->
+    <AudioCppRuntimeRids Condition="'$(AudioCppRuntimeRids)' == ''"></AudioCppRuntimeRids>
   </PropertyGroup>
 
   <ItemGroup>

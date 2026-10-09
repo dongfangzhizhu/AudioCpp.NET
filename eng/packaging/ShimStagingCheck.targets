@@ -8,9 +8,11 @@
     package that only fails later, on the consumer's machine, as a DllNotFoundException.
     Refuse to produce that package at all.
 
-    Set AudioCppRuntimeRids to declare which runtimes a release is expected to carry
-    (the pack scripts set it to the RIDs actually staged); the check then requires every
-    one of them to be present, not merely at least one.
+    RIDs: AudioCppRuntimeRids declares which runtimes a release is expected to carry.
+    When it is left unset the set is inferred from what is actually staged, so a release
+    built from a partial set of archives (say the Linux shim could not be produced)
+    packages exactly those RIDs instead of failing on a RID that was never going to
+    arrive. Set it explicitly to hold a release to a fixed RID set.
   -->
   <Target Name="AudioCppVerifyShimStaged" BeforeTargets="GenerateNuspec">
     <ItemGroup>
@@ -21,14 +23,36 @@
     <Error Condition="'@(_AudioCppStagedShim)' == ''"
            Text="Nothing to package for $(PackageId): no native shim found under '$(AudioCppShimDir)'. Build the shim first (eng/matrix/configure-win.ps1 + build-win.ps1, or eng/matrix/linux-full-matrix.sh) and stage it as '$(AudioCppShimDir)\win-x64\audiocpp_dotnet_native.dll' and/or '$(AudioCppShimDir)\linux-x64\libaudiocpp_dotnet_native.so'." />
 
-    <Error Condition="'$(AudioCppRuntimeRids)' != '' AND !Exists('$(AudioCppShimDir)\win-x64') AND $([System.String]::Copy('$(AudioCppRuntimeRids)').Contains('win-x64'))"
+    <PropertyGroup>
+      <!--
+        Which RIDs are actually staged. Both are usually present; a release built from a
+        partial archive set (say the Linux shim could not be produced) legitimately has
+        only one, and that must package fine rather than fail on a RID that was never
+        going to arrive.
+      -->
+      <_AudioCppHasWin   Condition="Exists('$(AudioCppShimDir)\win-x64')">true</_AudioCppHasWin>
+      <_AudioCppHasLinux Condition="Exists('$(AudioCppShimDir)\linux-x64')">true</_AudioCppHasLinux>
+
+      <!--
+        AudioCppRuntimeRids is the declared expectation; when the caller did not set one
+        (-p:AudioCppRuntimeRids=... is a global property and cannot be reassigned here,
+        which is exactly why the emptiness test has to come first), fall back to the
+        staged set so the package matches its own contents.
+      -->
+      <AudioCppRuntimeRids Condition="'$(AudioCppRuntimeRids)' == '' AND '$(_AudioCppHasWin)' == 'true' AND '$(_AudioCppHasLinux)' == 'true'">win-x64;linux-x64</AudioCppRuntimeRids>
+      <AudioCppRuntimeRids Condition="'$(AudioCppRuntimeRids)' == '' AND '$(_AudioCppHasWin)' == 'true'">win-x64</AudioCppRuntimeRids>
+      <AudioCppRuntimeRids Condition="'$(AudioCppRuntimeRids)' == '' AND '$(_AudioCppHasLinux)' == 'true'">linux-x64</AudioCppRuntimeRids>
+    </PropertyGroup>
+
+    <!-- A declared RID that is not staged is a packaging mistake, not a partial release. -->
+    <Error Condition="'$(AudioCppRuntimeRids)' != '' AND '$(_AudioCppHasWin)' != 'true' AND $([System.String]::Copy('$(AudioCppRuntimeRids)').Contains('win-x64'))"
            Text="$(PackageId) declares RID win-x64 in AudioCppRuntimeRids but '$(AudioCppShimDir)\win-x64' does not exist." />
 
-    <Error Condition="'$(AudioCppRuntimeRids)' != '' AND !Exists('$(AudioCppShimDir)\linux-x64') AND $([System.String]::Copy('$(AudioCppRuntimeRids)').Contains('linux-x64'))"
+    <Error Condition="'$(AudioCppRuntimeRids)' != '' AND '$(_AudioCppHasLinux)' != 'true' AND $([System.String]::Copy('$(AudioCppRuntimeRids)').Contains('linux-x64'))"
            Text="$(PackageId) declares RID linux-x64 in AudioCppRuntimeRids but '$(AudioCppShimDir)\linux-x64' does not exist." />
 
     <Message Importance="high"
-             Text="$(PackageId): packaging native shims from $(AudioCppShimDir) -> @(_AudioCppStagedShim->'%(RecursiveDir)%(Filename)%(Extension)', ' ')" />
+             Text="$(PackageId): packaging native shims from $(AudioCppShimDir) -> @(_AudioCppStagedShim->'%(RecursiveDir)%(Filename)%(Extension)', ' ')  (AudioCppRuntimeRids=$(AudioCppRuntimeRids))" />
   </Target>
 
 </Project>

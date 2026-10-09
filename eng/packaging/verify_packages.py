@@ -12,6 +12,7 @@ correct package looks like.
 
 Usage:
     python eng/packaging/verify_packages.py <packages-dir> [--natives staged|skipped]
+                                            [--rids win-x64,linux-x64]
 """
 
 from __future__ import annotations
@@ -28,11 +29,14 @@ MANAGED_REQUIRED = [
     "README.md",
 ]
 
-RUNTIME_REQUIRED = [
-    "runtimes/win-x64/native/audiocpp_dotnet_native.dll",
-    "runtimes/linux-x64/native/libaudiocpp_dotnet_native.so",
-    "README-runtime.md",
-]
+# The native file each RID contributes. A runtime package is expected to carry every
+# RID the release was built for -- see --rids -- and each one has its own file name.
+NATIVE_FILE = {
+    "win-x64": "runtimes/win-x64/native/audiocpp_dotnet_native.dll",
+    "linux-x64": "runtimes/linux-x64/native/libaudiocpp_dotnet_native.so",
+}
+
+RUNTIME_REQUIRED = ["README-runtime.md"]
 
 VERSION = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"
 
@@ -104,7 +108,7 @@ def verify_managed(packages: Path, report: Report) -> None:
         report.bad("no managed symbols package")
 
 
-def verify_runtime(packages: Path, package_id: str, report: Report) -> None:
+def verify_runtime(packages: Path, package_id: str, rids: list[str], report: Report) -> None:
     nupkg = pick(packages, package_id, "nupkg")
     if nupkg is None:
         report.bad(f"no {package_id}.<version>.nupkg found")
@@ -112,7 +116,7 @@ def verify_runtime(packages: Path, package_id: str, report: Report) -> None:
 
     print(nupkg.name)
     contents = entries(nupkg)
-    required = RUNTIME_REQUIRED + [
+    required = RUNTIME_REQUIRED + [NATIVE_FILE[rid] for rid in rids] + [
         f"buildTransitive/{package_id}.props",
         f"buildTransitive/{package_id}.targets",
     ]
@@ -120,6 +124,13 @@ def verify_runtime(packages: Path, package_id: str, report: Report) -> None:
         (report.ok if entry in contents else report.bad)(
             entry if entry in contents else f"missing {entry}"
         )
+
+    # The reverse direction matters as much: a native file for a RID the release was
+    # not built for is an archive that got carried over. Accepting it would put a
+    # library of unknown provenance in the package.
+    for rid, entry in NATIVE_FILE.items():
+        if rid not in rids and entry in contents:
+            report.bad(f"carries {entry}, which is not one of the staged RIDs ({','.join(rids)})")
 
     # Asset-only packages must stay dependency-free: the consumer adds the managed
     # reference explicitly, and a dependency here would silently pull it in.
@@ -137,7 +148,19 @@ def main() -> int:
     parser.add_argument("packages", type=Path, help="directory holding the built packages")
     parser.add_argument("--natives", choices=["staged", "skipped"], default="staged",
                         help="whether native archives were available for this build")
+    parser.add_argument("--rids", default="win-x64,linux-x64",
+                        help="comma-separated RIDs the runtime packages are expected to carry "
+                             "(default: both; pass what was actually staged)")
     args = parser.parse_args()
+
+    rids = [r.strip() for r in args.rids.split(",") if r.strip()]
+    unknown = [r for r in rids if r not in NATIVE_FILE]
+    if unknown:
+        print(f"FATAL: unknown RID(s): {', '.join(unknown)}", file=sys.stderr)
+        return 2
+    if args.natives == "staged" and not rids:
+        print("FATAL: --natives staged but --rids is empty", file=sys.stderr)
+        return 2
 
     if not args.packages.is_dir():
         print(f"FATAL: not a directory: {args.packages}", file=sys.stderr)
@@ -152,8 +175,10 @@ def main() -> int:
         print()
         print("runtime packages: skipped (no native archives for this release)")
     else:
+        print()
+        print(f"runtime packages: expecting RIDs {', '.join(rids)}")
         for package_id in ("AudioCpp.NET.Runtime", "AudioCpp.NET.Runtime.Cuda"):
-            verify_runtime(args.packages, package_id, report)
+            verify_runtime(args.packages, package_id, rids, report)
 
     print()
     if report.failures:
