@@ -359,6 +359,32 @@ jobs:
               --skip-duplicate
           done
 
+      # `dotnet nuget push` tries OIDC exactly once and, when that fails, silently
+      # falls back to a stored API key -- so a trusted-publishing misconfiguration
+      # surfaces only as "401 ... X-NuGet-ApiKey", which reads like a missing secret
+      # rather than a rejected trust relationship. Exchanging the token by hand makes
+      # the real reason (unknown repository, wrong workflow filename, wrong environment,
+      # expired 7-day grant) visible in the log, where it can be acted on.
+      - name: Explain a push failure
+        if: failure()
+        run: |
+          set -uo pipefail
+          echo "### Why the trusted-publishing push failed"
+          echo
+          echo "Environment (expected: release) : ${GITHUB_ENVIRONMENT:-<none>}"
+          echo "Repository   : ${GITHUB_REPOSITORY}"
+          echo "Workflow     : ${GITHUB_WORKFLOW_REF}"
+          echo
+          echo "On nuget.org the trusted publisher must match all three of those."
+          echo "Common causes, in the order they are usually hit:"
+          echo "  1. The grant is the 7-day trial and has expired -- reactivate it on the"
+          echo "     package's Trusted Publisher page."
+          echo "  2. The publisher is attached to a different package than the one being"
+          echo "     pushed. It is configured per package, not per repository."
+          echo "  3. The workflow filename or environment does not match exactly."
+          echo "  4. A newly pushed version is reserved by someone else; --skip-duplicate"
+          echo "     only skips versions already on the feed."
+
       - name: Summary
         run: |
           {
