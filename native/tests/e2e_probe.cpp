@@ -358,7 +358,17 @@ int run_batch(const Args & args) {
     audiocpp_model * model = load(args, err, sizeof(err));
     if (model == nullptr) { std::cerr << "e2e: load failed: " << err << '\n'; return 3; }
 
+    // Concatenate the clip into one interleaved pool and hand out equal slices of it.
+    // The slice offsets have to address real samples: declaring a pool larger than the
+    // buffer and pointing later requests past its end reads off the heap, which shows
+    // up as a crash inside the engine rather than as a bounds error.
     constexpr int32_t kRequests = 3;
+    std::vector<float> pool;
+    pool.reserve(wav.samples.size() * static_cast<size_t>(kRequests));
+    for (int32_t i = 0; i < kRequests; ++i) {
+        pool.insert(pool.end(), wav.samples.begin(), wav.samples.end());
+    }
+
     std::string requests = "[";
     for (int32_t i = 0; i < kRequests; ++i) {
         if (i != 0) requests += ',';
@@ -369,7 +379,7 @@ int run_batch(const Args & args) {
 
     char * json = nullptr;
     const int status = audiocpp_model_run_json_batch(model, "asr", requests.c_str(),
-        wav.samples.data(), int32_t(wav.samples.size()) * kRequests,
+        pool.data(), int32_t(pool.size()),
         wav.sample_rate, wav.channels, &json, err, sizeof(err));
     audiocpp_model_free(model);
     if (status != AUDIOCPP_OK) { std::cerr << "e2e: batch failed: " << err << '\n'; return 4; }

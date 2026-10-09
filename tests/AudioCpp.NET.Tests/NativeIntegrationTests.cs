@@ -113,21 +113,33 @@ public sealed class NativeIntegrationTests
         // The alias mapping must survive the round trip through the shim: an alias
         // the shim accepts but the managed table does not (or vice versa) is exactly
         // how a model ends up unreachable.
+        //
+        // This is a subset check, not an equality. AudioCppTaskKinds is the offline
+        // fallback and only records the *non-canonical* spec spellings, while the shim
+        // reports upstream's vocabulary verbatim -- which spells a name for every kind
+        // and for most kinds that name is the canonical token itself ({"asr", "asr"}).
+        // So the shim legitimately reports more tokens than the managed table lists, and
+        // requiring equality would fail on the pin bump rather than on a real defect.
+        // What must hold is the direction that loses models: everything the managed
+        // table promises a caller has to work in the shim too.
         var aliases = tasks
             .SelectMany(task => task.Aliases.Select(alias => (Alias: alias, Task: task.Task)))
             .ToDictionary(item => item.Alias, item => item.Task, StringComparer.OrdinalIgnoreCase);
-        Assert.Equal(AudioCppTaskKinds.Aliases.Count, aliases.Count);
         foreach (var (alias, canonical) in AudioCppTaskKinds.Aliases)
         {
             Assert.True(aliases.ContainsKey(alias), $"the shim does not accept the alias '{alias}'");
             Assert.Equal(canonical, aliases[alias]);
         }
 
+        // The canonical token itself must resolve to its own task, whether the shim
+        // spells it as an alias or not.
         foreach (var task in tasks)
         {
+            Assert.Contains(task.Task, AudioCppTaskKinds.Canonical);
             Assert.Contains(task.Input, new[] { "audio", "text", "audio+text" });
             Assert.NotEmpty(task.TypicalOutputs);
             Assert.Equal(task.Task, task.AllTokens[0]);
+            Assert.Equal(task.AllTokens.Count, task.AllTokens.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         }
     }
 

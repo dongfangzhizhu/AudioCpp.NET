@@ -62,8 +62,16 @@ public static class AudioCppTaskKinds
 /// <summary>One entry of the native task catalog.</summary>
 public sealed record AudioCppTaskInfo(string Task, string Input, IReadOnlyList<string> TypicalOutputs, IReadOnlyList<string> Aliases)
 {
-    /// <summary>Aliases plus the canonical token, for UI pickers.</summary>
-    public IReadOnlyList<string> AllTokens => Aliases.Prepend(Task).ToArray();
+    /// <summary>
+    /// Every token that resolves to this task, canonical first, for UI pickers.
+    ///
+    /// De-duplicated because the native catalog lists the canonical token among its own
+    /// aliases (upstream's vocabulary spells a spec-side name for every kind, and for
+    /// most kinds that spelling *is* the canonical token). Prepending unconditionally
+    /// would render "asr" twice.
+    /// </summary>
+    public IReadOnlyList<string> AllTokens =>
+        Aliases.Prepend(Task).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 }
 
 /// <summary>A TaskRequest::input_artifacts entry. Supply <see cref="PayloadHex"/>,

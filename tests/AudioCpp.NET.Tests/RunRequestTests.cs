@@ -60,6 +60,22 @@ public sealed class RunRequestTests
     }
 
     [Fact]
+    public void TaskInfoDoesNotRepeatTheCanonicalTokenItListsAsItsOwnAlias()
+    {
+        // Upstream's vocabulary spells a name for every task kind, and for most kinds
+        // that name *is* the canonical token ({"asr", "asr"}), so the catalog the shim
+        // returns lists it among the aliases. AllTokens feeds UI pickers: without
+        // de-duplication "asr" is offered twice.
+        var asr = new AudioCppTaskInfo("asr", "audio", ["text_output"], ["asr"]);
+        Assert.Equal(new[] { "asr" }, asr.AllTokens);
+
+        var gen = new AudioCppTaskInfo("gen", "text", ["audio_output"], ["gen", "music", "sfx"]);
+        Assert.Equal(new[] { "gen", "music", "sfx" }, gen.AllTokens);
+        Assert.Equal(gen.AllTokens.Count,
+            gen.AllTokens.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+    }
+
+    [Fact]
     public void ValidateRejectsUnknownTaskAndListsTheAlternatives()
     {
         var exception = Assert.Throws<ArgumentException>(() =>

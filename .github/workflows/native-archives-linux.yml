@@ -1,0 +1,228 @@
+name: native-archives-linux
+
+# Build the Linux native shim archives that a release publishes:
+#
+#   audiocpp-native-linux-x64-cpu.zip
+#   audiocpp-native-linux-x64-cuda.zip
+#
+# The Windows halves of a release are built on a machine that has MSVC and the GPU,
+# because that toolchain is not something a hosted runner should be asked to reproduce.
+# Linux is the opposite case: an ordinary ubuntu runner has gcc, ninja and the CUDA
+# toolkit, so the Linux archives can be produced here instead of on a maintainer's
+# workstation. That matters when the workstation cannot run WSL — the archives are
+# prebuilt binaries that CI cannot otherwise rebuild, so "build them locally" is not a
+# step that can be skipped indefinitely.
+#
+# Like native-abi.yml, this is NOT a gate: it produces artefacts. The shims are built
+# against the pinned audio.cpp revision from eng/upstream.lock.json with
+# AUDIOCPP_MODEL_SET=full, which is the shipping configuration.
+#
+# The archives are uploaded as workflow artifacts, and — when a tag is supplied — also
+# attached to that tag's GitHub Release, which is where release.yml looks for them.
+# CUDA is compiled, not executed: no GPU is needed to build it, and the archive is
+# verified only by its exported symbols, never by running inference.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to attach the archives to (e.g. v0.2.0). Leave empty to build without uploading.'
+        required: false
+        type: string
+      backend:
+        description: 'Which backend to build'
+        required: true
+        default: cpu
+        type: choice
+        options: [cpu, cuda]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: linux shim (${{ inputs.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same pin-resolution logic as native-abi.yml: CMakeLists.txt asserts the
+      # checkout is at the pinned revision, and eng/upstream.lock.json is the single
+      # source of truth for which revision that is. The upstream checkout must be a
+      # sibling directory because AUDIOCPP_SRC defaults to ../audio.cpp.
+      - name: Check out the pinned audio.cpp revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHA=$(sed -n 's/.*"commit": *"\([0-9a-f]\{40\}\)".*/\1/p' eng/upstream.lock.json | head -1)
+          URL=$(sed -n 's/.*"repository": *"\([^"]*\)".*/\1/p' eng/upstream.lock.json | head -1)
+          test -n "$SHA" || { echo "could not read the pinned commit from eng/upstream.lock.json"; exit 1; }
+          test -n "$URL" || { echo "could not read the upstream repository from eng/upstream.lock.json"; exit 1; }
+          case "$URL" in *.git) ;; *) URL="$URL.git" ;; esac
+          UPSTREAM="$GITHUB_WORKSPACE/../audio.cpp"
+          git init "$UPSTREAM"
+          git -C "$UPSTREAM" remote add origin "$URL"
+          git -C "$UPSTREAM" fetch --depth 1 origin "$SHA"
+          git -C "$UPSTREAM" checkout --detach FETCH_HEAD
+          echo "pinned upstream: $(git -C "$UPSTREAM" rev-parse HEAD) (expected $SHA)"
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git ca-certificates
+          cmake --version
+          ninja --version
+          gcc --version | head -1
+
+      # CUDA is only needed for the cuda backend. ubuntu-latest ships the toolkit, but
+      # the image moves, so locate it rather than hardcoding a version directory.
+      - name: Locate the CUDA toolkit
+        if: inputs.backend == 'cuda'
+        shell: bash
+        run: |
+          set -euo pipefail
+          NVCC=$(command -v nvcc || true)
+          if [ -z "$NVCC" ]; then
+            NVCC=$(ls -1d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V | tail -1 || true)
+          fi
+          test -n "$NVCC" || { echo "no CUDA toolkit on this runner; use a GPU-enabled runner image for the cuda backend"; exit 1; }
+          echo "NVCC=$NVCC" >> "$GITHUB_ENV"
+          echo "nvcc: $NVCC"
+          "$NVCC" --version | tail -2
+
+      - name: Configure (full model set)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=(
+            -S . -B build/native-ci -G Ninja
+            -DCMAKE_BUILD_TYPE=Release
+            -DAUDIOCPP_MODEL_SET=full
+            -DAUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER=ON
+          )
+          if [ "${{ inputs.backend }}" = "cuda" ]; then
+            ARGS+=(-DAUDIOCPP_BACKEND=cuda -DCMAKE_CUDA_ARCHITECTURES=89)
+            # The toolkit root has to be derived from the located nvcc: CMake's own
+            # search can miss a versioned install directory.
+            ROOT=$(dirname "$(dirname "$NVCC")")
+            ARGS+=("-DCUDAToolkit_ROOT=$ROOT")
+          else
+            ARGS+=(-DAUDIOCPP_BACKEND=cpu)
+          fi
+          cmake "${ARGS[@]}" 2>&1 | tee configure.log
+          grep -o 'model composite: full selected \[[^]]*\]' configure.log | head -1 | tr ';' '\n' | wc -l \
+            | xargs -I{} echo "linked model families: {}"
+
+      # The runner has 4 cores; asking for more only thrashes. --parallel with no
+      # number is what the hosted images are sized for.
+      - name: Build the shim
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build build/native-ci --parallel \
+            --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke 2>&1 | tail -200
+
+      # Same ABI gate native-abi.yml runs: version, required capability bits, the task
+      # catalog and the newer entry points. A shim that builds but reports the wrong ABI
+      # must not reach a release.
+      - name: Run ABI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          SMOKE=$(find build/native-ci -type f -name 'audiocpp_dotnet_abi_smoke' -print | head -1)
+          test -n "$SMOKE" || { echo "could not locate the ABI smoke binary"; exit 1; }
+          echo "running $SMOKE"
+          "$SMOKE"
+
+      # Cross-check the exports against the committed list, so a shim that compiled but
+      # dropped an export (linker --gc-sections, a stale export map) cannot ship.
+      - name: Verify the exported symbols
+        shell: bash
+        run: |
+          set -euo pipefail
+          LIB=build/native-ci/libaudiocpp_dotnet_native.so
+          test -f "$LIB" || { echo "missing $LIB"; exit 1; }
+          echo "library: $(stat -c%s "$LIB") bytes"
+          MISSING=0
+          while read -r sym; do
+            [ -n "$sym" ] || continue
+            if ! nm -D --defined-only "$LIB" | grep -qw "$sym"; then
+              echo "  MISSING export: $sym"
+              MISSING=1
+            fi
+          done < native/exports/expected-symbols.txt
+          [ "$MISSING" = 0 ] || { echo "export table does not match native/exports/expected-symbols.txt"; exit 1; }
+          echo "all expected exports present"
+
+      - name: Pack the archive
+        id: pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          RID=linux-x64
+          BACKEND=${{ inputs.backend }}
+          LIB=libaudiocpp_dotnet_native.so
+          STAGE=build/archive-stage/$RID
+          mkdir -p "$STAGE"
+          cp "build/native-ci/$LIB" "$STAGE/$LIB"
+          OUT=audiocpp-native-$RID-$BACKEND.zip
+          rm -f "$OUT"
+          # -j0 stores without deflate: the shim is already compressed data, so
+          # deflating it costs CPU and saves nothing.
+          (cd "$STAGE" && zip -q -j -0 "$GITHUB_WORKSPACE/$OUT" "$LIB")
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "bytes=$(stat -c%s "$OUT")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$OUT" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "$OUT: $(stat -c%s "$OUT") bytes  sha256=$(sha256sum "$OUT" | cut -d' ' -f1)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audiocpp-native-linux-x64-${{ inputs.backend }}
+          path: audiocpp-native-linux-x64-${{ inputs.backend }}.zip
+          if-no-files-found: error
+
+      # Attaching to the release is what release.yml consumes. Upload separately from
+      # the artifact step so a tag that already has the file from a previous run is
+      # replaced rather than causing a duplicate-asset conflict that fails the job.
+      - name: Attach the archive to the release
+        if: inputs.tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          FILE="audiocpp-native-linux-x64-${{ inputs.backend }}.zip"
+          # A tag with no release yet gets one; an existing release is reused. --clobber
+          # makes a re-run after a code change replace the stale archive.
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG" --generate-notes --draft
+          fi
+          gh release upload "$TAG" "$FILE" --clobber --repo "$GITHUB_REPOSITORY"
+          echo "attached $FILE to $TAG"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[] | "\(.name)  \(.size) B"'
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "### linux-x64 ${{ inputs.backend }} archive"
+            echo
+            echo '```'
+            echo "audiocpp-native-linux-x64-${{ inputs.backend }}.zip  ${{ steps.pack.outputs.bytes }} B"
+            echo "sha256 ${{ steps.pack.outputs.sha256 }}"
+            echo '```'
+            echo
+            echo "audio.cpp pin: $(sed -n 's/.*\"commit\": *\"\([0-9a-f]\{40\}\)\".*/\1/p' eng/upstream.lock.json | head -1)"
+            if [ "${{ inputs.tag }}" = "" ]; then
+              echo
+              echo "No tag was supplied, so this is only a workflow artifact. Re-run with"
+              echo "tag=<version> to attach it to a release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

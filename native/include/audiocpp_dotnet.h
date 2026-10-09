@@ -164,6 +164,13 @@ AUDIOCPP_API int32_t audiocpp_model_run_json_ex(
  * N clips costs one marshalled buffer instead of N calls. `offset` counts
  * interleaved samples from the buffer start and must stay inside it.
  *
+ * audio_pool_count is the caller's declaration of how many samples the buffer
+ * really holds, and it is the only thing the bounds check can consult: the
+ * shim takes a bare pointer, so an offset/count that fits the declared pool but
+ * runs past the actual allocation is undefined behaviour and will not be
+ * reported as an error. Declaring more than you allocated is the one mistake
+ * this entry point cannot catch.
+ *
  * When `task` is null/empty it is inferred per request like run_json_ex:
  * requests with audio become asr, the others tts.
  *
