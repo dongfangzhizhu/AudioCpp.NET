@@ -11,9 +11,10 @@ bool contains(const char * haystack, const char * needle) {
 
 // The managed reader parses both audiocpp_model_run_json_ex and
 // audiocpp_stream_finish with one type, and reads the "task" echo added in schema
-// 2. Bump this assert whenever the schema changes so the two stay in step.
-static_assert(AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION == 2u,
-              "managed AudioCppTaskResult expects structured result schema 2");
+// 2 plus the "custom_schema_output" channel added in schema 3. Bump this assert
+// whenever the schema changes so the two stay in step.
+static_assert(AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION == 3u,
+              "managed AudioCppTaskResult expects structured result schema 3");
 static_assert(AUDIOCPP_TASK_CATALOG_SCHEMA_VERSION == 1u,
               "managed CatalogJson.ParseTasks expects task catalog schema 1");
 
@@ -31,7 +32,7 @@ int main() {
         return 1;
     }
     if (info.abi_major != 1 || info.abi_minor != 4) return 2;
-    if (std::strcmp(info.audio_cpp_commit, "f825d1d1b92af309585aeb656b2a59c44fc603eb") != 0) return 3;
+    if (std::strcmp(info.audio_cpp_commit, "22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8") != 0) return 3;
     if (info.shim_version == nullptr || info.backend == nullptr) return 4;
     const uint64_t required = AUDIOCPP_CAP_SYNTHESIZE | AUDIOCPP_CAP_TRANSCRIBE |
         AUDIOCPP_CAP_STRUCTURED_RESULTS | AUDIOCPP_CAP_STREAMING |
@@ -46,14 +47,16 @@ int main() {
 
     char * tasks = nullptr;
     if (audiocpp_get_task_catalog(&tasks, error, sizeof(error)) != AUDIOCPP_OK || tasks == nullptr) return 8;
-    // Every canonical token must be published, and all seven spec aliases that
+    // Every canonical token must be published, and all nine spec aliases that
     // audiocpp_model_run_json accepts must be discoverable through it (upstream
-    // removed the fake "codec" alias when the task vocabulary became public, #544).
+    // removed the fake "codec" alias when the task vocabulary became public, #544;
+    // v0.9.2 added wake_word/classify for the two new detector/classifier kinds).
     // Omitting an alias here is how a model becomes unreachable from managed code.
     for (const char * token : {"\"vad\"", "\"asr\"", "\"diar\"", "\"sep\"", "\"gen\"", "\"tts\"", "\"clon\"",
                                "\"vc\"", "\"s2s\"", "\"align\"", "\"vdes\"", "\"spk\"", "\"svc\"", "\"midi\"",
+                               "\"turn\"", "\"wake\"", "\"cls\"",
                                "\"audio_generation\"", "\"music\"", "\"sfx\"", "\"edit\"",
-                               "\"clone\"", "\"design\"", "\"speaker\""}) {
+                               "\"clone\"", "\"design\"", "\"speaker\"", "\"wake_word\"", "\"classify\""}) {
         if (!contains(tasks, token)) {
             std::cerr << "task catalog is missing " << token << '\n';
             audiocpp_buffer_free(tasks);

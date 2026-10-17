@@ -26,16 +26,24 @@ public static class AudioCppTaskKinds
     public const string SpeakerRecognition = "spk";
     public const string Svc = "svc";
     public const string Midi = "midi";
+    // Added upstream at v0.9.2 (pin 22cad6af5): turn-completion detection,
+    // wake-word detection and audio classification.
+    public const string TurnDetection = "turn";
+    public const string WakeWord = "wake";
+    public const string AudioClassification = "cls";
 
     public static IReadOnlyList<string> Canonical { get; } = new[]
     {
         Vad, Asr, Diarization, SourceSeparation, AudioGeneration, Tts, VoiceCloning, VoiceConversion,
         SpeechToSpeech, Alignment, VoiceDesign, SpeakerRecognition, Svc, Midi,
+        TurnDetection, WakeWord, AudioClassification,
     };
 
     /// <summary>model_spec/*.json "tasks" tokens that are not canonical. Mirrors
     /// upstream's task vocabulary (engine/framework/runtime/task_vocabulary.h);
-    /// the shim forwards token resolution to that table since pin f825d1d1.</summary>
+    /// the shim forwards token resolution to that table since pin f825d1d1.
+    /// "turn" is deliberately absent: upstream spells the canonical token as its
+    /// own alias there, same as "vad" or "tts".</summary>
     public static IReadOnlyDictionary<string, string> Aliases { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         ["audio_generation"] = AudioGeneration,
@@ -45,6 +53,9 @@ public static class AudioCppTaskKinds
         ["clone"] = VoiceCloning,
         ["design"] = VoiceDesign,
         ["speaker"] = SpeakerRecognition,
+        // v0.9.2 additions: the specs spell these kinds "wake_word"/"classify".
+        ["wake_word"] = WakeWord,
+        ["classify"] = AudioClassification,
     };
 
     /// <summary>Resolves a canonical token or an alias to its canonical form.</summary>
@@ -141,6 +152,9 @@ internal static class AudioCppTaskCatalog
         new AudioCppTaskInfo(AudioCppTaskKinds.SpeakerRecognition, "audio", ["artifact_output"], ["speaker"]),
         new AudioCppTaskInfo(AudioCppTaskKinds.Svc, "audio+text", ["audio_output"], []),
         new AudioCppTaskInfo(AudioCppTaskKinds.Midi, "audio", ["artifact_output"], []),
+        new AudioCppTaskInfo(AudioCppTaskKinds.TurnDetection, "audio", ["custom_schema_output"], []),
+        new AudioCppTaskInfo(AudioCppTaskKinds.WakeWord, "audio", ["speech_segments"], ["wake_word"]),
+        new AudioCppTaskInfo(AudioCppTaskKinds.AudioClassification, "audio", ["custom_schema_output"], ["classify"]),
     };
 
 }

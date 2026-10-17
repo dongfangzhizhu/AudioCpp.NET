@@ -64,8 +64,12 @@ enum {
  * 2 - added "task": the canonical token of the task that actually ran. Callers
  *     that omit the task argument (the shim infers it from the request shape)
  *     can now read back what was inferred.
+ * 3 - added "custom_schema_output": {"schema":"…","data":{…}} for loaders whose
+ *     result is neither text nor audio (smart_turn turn decision, ast_audioset
+ *     classification scores). Absent/null for every other task, so schema-2
+ *     readers keep working unchanged.
  */
-#define AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION 2u
+#define AUDIOCPP_STRUCTURED_RESULT_SCHEMA_VERSION 3u
 #define AUDIOCPP_TASK_CATALOG_SCHEMA_VERSION 1u
 
 typedef struct audiocpp_abi_info {
@@ -174,7 +178,7 @@ AUDIOCPP_API int32_t audiocpp_model_run_json_ex(
  * When `task` is null/empty it is inferred per request like run_json_ex:
  * requests with audio become asr, the others tts.
  *
- * `out_json` is {"schema_version":2,"task":"<canonical token>","results":[
+ * `out_json` is {"schema_version":3,"task":"<canonical token>","results":[
  * <task_result>, ...]} with one result per request, in order. Requires
  * AUDIOCPP_CAP_BATCH. Models implementing upstream's batched offline session
  * run natively batched; the rest are executed sequentially through the plain

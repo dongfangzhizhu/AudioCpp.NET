@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/0xShug0/audio.cpp",
-  "commit": "f825d1d1b92af309585aeb656b2a59c44fc603eb",
-  "shortCommit": "f825d1d1b92a",
+  "commit": "22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8",
+  "shortCommit": "22cad6af5043",
   "branchAtPin": "main",
-  "describeAtPin": "v0.8.2-audio8-perf-hotfix-28-gf825d1d1",
-  "pinnedAtUtc": "2026-09-29T00:00:00Z",
+  "describeAtPin": "v0.9.2-4-g22cad6af",
+  "pinnedAtUtc": "2026-10-17T09:07:19.2189685Z",
   "shimAbi": {
     "major": 1,
     "minor": 4
@@ -15,10 +15,14 @@
     "defaultBackend": "cpu",
     "defaultModelSet": "full",
     "defaultModels": [],
-    "modelSetOptions": ["full", "core", "custom"],
-    "modelFamilies": 101,
+    "modelSetOptions": [
+      "full",
+      "core",
+      "custom"
+    ],
+    "modelFamilies": 123,
     "modelManagerDefault": "on",
     "portableCpu": true,
-    "notes": "Values at pin f825d1d1 (v0.8.2-audio8-perf-hotfix-28): 101 model_specs families. ABI 1.4 adds the batched run entry point (audiocpp_model_run_json_batch, AUDIOCPP_CAP_BATCH) and list-valued run options routed to TaskRequest::option_arrays (AUDIOCPP_CAP_OPTION_ARRAYS); task token/alias resolution is delegated to upstream's public task vocabulary (task_vocabulary.h, #544), which removed the fake 'codec' alias. Loader/catalog counts for the full-set build are re-verified at release time."
+    "notes": "Values at pin 22cad6af5 (v0.9.2-4-g22cad6af, 2026-10-17 win-cpu full build): 123 model_specs families -> 123 linked loaders, catalog 125 entries (123 + 2 built-in VADs), 384 downloadable packages. ABI stays 1.4; the batched run entry point (audiocpp_model_run_json_batch, AUDIOCPP_CAP_BATCH) and list-valued run options routed to TaskRequest::option_arrays (AUDIOCPP_CAP_OPTION_ARRAYS) are unchanged; task token/alias resolution is delegated to upstream's public task vocabulary (task_vocabulary.h, #544). v0.9.2 adds VoiceTaskKind TurnDetection/WakeWord/AudioClassification (tokens turn/wake/cls; spec aliases wake_word/classify), TaskResult::custom_schema_output, StreamEvent::partial_text_snapshot and engine::io::json::enable_serialized_json_parsing(); structured-result schema goes 2 -> 3 (additive, optional fields only) and the shim reports 0.6.0. Loader/catalog counts re-verified at release time."
   }
 }

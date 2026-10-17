@@ -12,6 +12,9 @@ artifacts/
 *.user
 *.suo
 
+# Agent session state (commit message drafts etc.), not project content
+.workbuddy/
+
 # NuGet output (packages are produced by eng/packaging/pack.*)
 *.nupkg
 *.snupkg

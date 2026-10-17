@@ -82,9 +82,9 @@ public sealed class NativeIntegrationTests
         var info = runtime.BuildInfo;
 
         Assert.Equal(1u, info.AbiMajor);
-        Assert.True(info.AbiMinor >= 4, $"the wrappers need structured-result schema 2 / abi 1.4+, reported 1.{info.AbiMinor}");
+        Assert.True(info.AbiMinor >= 4, $"the wrappers need structured-result schema 3 / abi 1.4+, reported 1.{info.AbiMinor}");
         Assert.False(string.IsNullOrWhiteSpace(info.ShimVersion));
-        Assert.Equal("f825d1d1b92af309585aeb656b2a59c44fc603eb", info.AudioCppCommit);
+        Assert.Equal("22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8", info.AudioCppCommit);
 
         foreach (var (bit, name) in new (ulong Bit, string Name)[]
         {
@@ -189,7 +189,7 @@ public sealed class NativeIntegrationTests
             Channels = 1,
         });
 
-        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(3, result.SchemaVersion);
         Assert.Equal(NativeIntegration.RunTask, result.Task);
         Assert.Contains($"\"task\":\"{NativeIntegration.RunTask}\"", result.RawJson.GetRawText());
     }
@@ -209,7 +209,7 @@ public sealed class NativeIntegrationTests
             Channels = 1,
         });
 
-        Assert.Equal(2, result.SchemaVersion);
+        Assert.Equal(3, result.SchemaVersion);
         Assert.NotNull(result.Task);
         Assert.Contains(result.Task!, AudioCppTaskKinds.Canonical);
     }
@@ -231,7 +231,8 @@ public sealed class NativeIntegrationTests
         // The reader must never throw on a real payload, and the schema the shim
         // emits today must still carry every channel the managed record exposes.
         foreach (var channel in new[] { "audio_output", "named_audio_outputs", "speech_segments",
-                                        "speaker_turns", "word_timestamps", "artifact_output", "output_artifacts" })
+                                        "speaker_turns", "word_timestamps", "custom_schema_output",
+                                        "artifact_output", "output_artifacts" })
             Assert.True(result.RawJson.TryGetProperty(channel, out _), $"structured result is missing '{channel}'");
     }
 

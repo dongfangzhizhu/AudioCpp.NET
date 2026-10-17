@@ -530,7 +530,8 @@ internal sealed class AudioCppWorkbench
             result.SpeakerTurns.Select(ParseTurn).ToArray(),
             result.Artifacts.Select(ParseArtifact).ToArray(),
             result.Artifact is null ? null : ParseArtifact(result.Artifact),
-            result.RawJson.GetRawText());
+            result.RawJson.GetRawText(),
+            result.CustomSchemaOutput?.Schema);
     }
 
     private AudioClipResult Save(string fileName, AudioCppAudioClip clip)
@@ -748,4 +749,7 @@ internal sealed record RunResult(
     long SchemaVersion, string Task, string? Text, string? TextLanguage,
     AudioClipResult? Audio, AudioClipResult[] NamedAudio,
     SpeechSegmentResult[] Segments, WordResult[] Words, SpeakerTurnResult[] Turns,
-    ArtifactResult[] Artifacts, ArtifactResult? Artifact, string RawJson);
+    ArtifactResult[] Artifacts, ArtifactResult? Artifact, string RawJson,
+    // Model-defined structured channel (schema 3+): turn decisions, classification
+    // scores. The payload JSON itself stays available through RawJson.
+    string? CustomSchema);

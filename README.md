@@ -2,9 +2,9 @@
 
 .NET 10 bindings for [audio.cpp](https://github.com/0xShug0/audio.cpp), using a small versioned C ABI shim over `engine_runtime`.
 
-> Status: wraps every model family the pinned engine defines — 74 `model_specs`
-> families produce 74 linked loaders and a 76-entry catalog (74 + 2 built-in VADs),
-> with 217 downloadable packages. Verified on four platform cells:
+> Status: wraps every model family the pinned engine defines — 123 `model_specs`
+> families produce 123 linked loaders and a 125-entry catalog (123 + 2 built-in VADs),
+> with 384 downloadable packages. Verified on four platform cells:
 > Windows/Linux × CPU/CUDA, plus Windows/Linux × Vulkan. See
 > [`docs/verification/release-readiness.md`](docs/verification/release-readiness.md)
 > for the evidence. The upstream source is pinned; this repository never builds an
@@ -32,7 +32,7 @@ dotnet run --project src/AudioCpp.NET.Console -- models download <id> --models-d
 ## Pinned upstream
 
 - Repository: `https://github.com/0xShug0/audio.cpp`
-- Commit: `f825d1d1b92af309585aeb656b2a59c44fc603eb` (`v0.8.2-audio8-perf-hotfix-28-gf825d1d1`)
+- Commit: `22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8` (`v0.9.2-4-g22cad6af`)
 - Lock file: [`eng/upstream.lock.json`](eng/upstream.lock.json)
 - License: Apache-2.0 (Copyright 2026 ShugoAI LLC) — see [`NOTICE`](NOTICE)
 
@@ -164,10 +164,10 @@ Scripted subcommands are unchanged and `help` still prints the command
 reference. Two additional subcommands exercise the full ABI surface:
 
 - `tasks --native PATH` prints the native task catalog: every canonical token
-  (`vad/asr/diar/sep/gen/tts/clon/vc/s2s/align/vdes/spk/svc/midi`) plus the
-  model-spec aliases (`audio_generation/music/sfx/edit/clone/design/speaker`,
-  resolved through upstream's task vocabulary since pin f825d1d1)
-  with their input shape, typical outputs and aliases.
+  (`vad/asr/diar/sep/gen/tts/clon/vc/s2s/align/vdes/spk/svc/midi/turn/wake/cls`)
+  plus the model-spec aliases (`audio_generation/music/sfx/edit/clone/design/speaker/
+  wake_word/classify`, resolved through upstream's task vocabulary since pin
+  f825d1d1) with their input shape, typical outputs and aliases.
 - `run --model DIR --task TOKEN [--input WAV | --text TEXT] [--text-language LANG]
   [--artifact kind:hex|kind:path ...] [--style-language LANG] [--emotion E]
   [--speaking-rate R] [--pitch-shift S] [--energy-scale X] [--style-tag k=v]
@@ -205,7 +205,8 @@ by the final speech segments. **PROBE POLICY**
 returns the same `input`/`output` policy and preferred chunk size, which is the
 cheapest way to check whether a directory can stream at all. Streaming needs a
 loader that advertises a `streaming` mode for the requested task (in this pinned
-build only `silero_vad`), and that loader accepts 16 kHz input only.
+build: `silero_vad` plus the wake-word detectors `micro_wake_word` and
+`sherpa_kws`), and every one of those loaders accepts 16 kHz input only.
 
 The workbench serves `wwwroot` from the output directory, so run the built
 executable from its own folder (or use `dotnet run`, which sets the content root
@@ -243,7 +244,7 @@ cmake -S . -B build/native-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
 cmake --build build/native-cpu --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke audiocpp_dotnet_e2e --parallel
 ```
 
-`AUDIOCPP_MODEL_SET` accepts `full` (all 74 families, the default and what releases
+`AUDIOCPP_MODEL_SET` accepts `full` (all 123 families, the default and what releases
 use), `core` (engine only, no model loaders — used by the CI ABI gate) and `custom`
 (an explicit `-DAUDIOCPP_MODELS=...` list).
 

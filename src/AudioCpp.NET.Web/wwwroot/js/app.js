@@ -745,7 +745,8 @@ function renderRunResult(result, ids) {
       `segments    ${(result.segments || []).length}\n` +
       `words       ${(result.words || []).length}\n` +
       `turns       ${(result.turns || []).length}\n` +
-      `artifacts   ${(result.artifacts || []).length}${result.artifact ? " + primary" : ""}`;
+      `artifacts   ${(result.artifacts || []).length}${result.artifact ? " + primary" : ""}\n` +
+      `custom      ${result.customSchema ?? "（无）"}`;
   }
   if (ids.text) $(ids.text).textContent = result.text || "（空文本）";
   if (ids.audio) renderAudioTracks($(ids.audio), result.audio, result.namedAudio);

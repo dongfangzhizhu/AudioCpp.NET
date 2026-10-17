@@ -50,6 +50,11 @@ public sealed record AudioCppAudioClip(int SampleRate, int Channels, IReadOnlyLi
 }
 public sealed record AudioCppNamedAudio(string Id, AudioCppAudioClip Audio, IReadOnlyDictionary<string, string> Meta);
 public sealed record AudioCppArtifact(string Id, string Kind, string PayloadHex, IReadOnlyDictionary<string, string> Meta);
+/// <summary>Model-defined structured result channel (structured-result schema 3+,
+/// upstream v0.9.x). <see cref="Schema"/> identifies the payload layout
+/// (e.g. "smart_turn.v1", "ast_audioset.classification.v1"); <see cref="Data"/>
+/// is that schema's JSON object. Null for every other task.</summary>
+public sealed record AudioCppCustomSchemaOutput(string Schema, JsonElement Data);
 public sealed record AudioCppTaskResult(JsonElement RawJson)
 {
     public long? SchemaVersion => RawJson.TryGetProperty("schema_version", out var value) && value.TryGetInt64(out var parsed) ? parsed : null;
@@ -66,6 +71,15 @@ public sealed record AudioCppTaskResult(JsonElement RawJson)
     public IReadOnlyList<AudioCppSpeakerTurn> SpeakerTurns => Array("speaker_turns").Select(ParseSpeakerTurn).ToArray();
     public IReadOnlyList<AudioCppWordTimestamp> WordTimestamps => Array("word_timestamps").Select(ParseWordTimestamp).ToArray();
     public AudioCppArtifact? Artifact => RawJson.TryGetProperty("artifact_output", out var value) && value.ValueKind == JsonValueKind.Object ? ParseArtifact(value) : null;
+    /// <summary>Model-defined structured payload for tasks whose result is neither
+    /// text nor audio (turn detection, audio classification). Null when the task
+    /// does not produce one. <see cref="AudioCppCustomSchemaOutput.Data"/> stays
+    /// valid as long as the document backing <see cref="RawJson"/> is alive.</summary>
+    public AudioCppCustomSchemaOutput? CustomSchemaOutput => RawJson.TryGetProperty("custom_schema_output", out var value) && value.ValueKind == JsonValueKind.Object
+        ? new AudioCppCustomSchemaOutput(
+            value.TryGetProperty("schema", out var schema) && schema.ValueKind == JsonValueKind.String ? schema.GetString() ?? "" : "",
+            value.TryGetProperty("data", out var data) ? data.Clone() : default)
+        : null;
     public IReadOnlyList<AudioCppArtifact> Artifacts => Array("output_artifacts").Select(ParseArtifact).ToArray();
     internal IEnumerable<JsonElement> Array(string name) => Array(RawJson, name);
     internal static IEnumerable<JsonElement> Array(JsonElement parent, string name) => parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
@@ -579,6 +593,14 @@ public sealed record AudioCppStreamEvent(
     IReadOnlyList<AudioCppWordTimestamp> WordTimestamps, IReadOnlyList<AudioCppArtifact> Artifacts,
     bool IsFinal)
 {
+    /// <summary>
+    /// Revisable whole-transcript hypothesis (upstream v0.9.x StreamEvent field).
+    /// Null unless the loader fills it; when present, clients replace their
+    /// provisional display with it instead of appending to
+    /// <see cref="PartialText"/>, which stays append-only committed text.
+    /// </summary>
+    public (string? Text, string? Language)? PartialTextSnapshot { get; init; }
+
     internal static IReadOnlyList<AudioCppStreamEvent> Parse(string json)
     {
         using var document = JsonDocument.Parse(json);
@@ -601,7 +623,19 @@ public sealed record AudioCppStreamEvent(
         AudioCppTaskResult.Array(value, "speaker_turns").Select(AudioCppTaskResult.ParseSpeakerTurn).ToArray(),
         AudioCppTaskResult.Array(value, "word_timestamps").Select(AudioCppTaskResult.ParseWordTimestamp).ToArray(),
         AudioCppTaskResult.Array(value, "output_artifacts").Select(AudioCppTaskResult.ParseArtifact).ToArray(),
-        value.TryGetProperty("is_final", out var isFinal) && isFinal.ValueKind == JsonValueKind.True);
+        value.TryGetProperty("is_final", out var isFinal) && isFinal.ValueKind == JsonValueKind.True)
+    {
+        PartialTextSnapshot = ParseTranscriptSnapshot(value),
+    };
+
+    private static (string? Text, string? Language)? ParseTranscriptSnapshot(JsonElement value)
+    {
+        if (!value.TryGetProperty("partial_text_snapshot", out var snapshot) || snapshot.ValueKind != JsonValueKind.Object)
+            return null;
+        var snapshotText = snapshot.TryGetProperty("text", out var text) && text.ValueKind == JsonValueKind.String ? text.GetString() : null;
+        var snapshotLanguage = snapshot.TryGetProperty("language", out var language) && language.ValueKind == JsonValueKind.String ? language.GetString() : null;
+        return snapshotText is null && snapshotLanguage is null ? null : (snapshotText, snapshotLanguage);
+    }
 
     private static AudioCppVoiceActivity ParseVoiceActivity(JsonElement value) => new(
         value.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.String ? kind.GetString() ?? "speech_segment" : "speech_segment",
@@ -617,7 +651,7 @@ public sealed record AudioCppStreamEvent(
     public bool HasContent =>
         PartialText is not null || !string.IsNullOrEmpty(Language) || VoiceActivity.Count > 0 ||
         AudioOutput is not null || NamedAudioOutputs.Count > 0 || SpeakerTurns.Count > 0 ||
-        WordTimestamps.Count > 0 || Artifacts.Count > 0;
+        WordTimestamps.Count > 0 || Artifacts.Count > 0 || PartialTextSnapshot is not null;
 }
 
 /// <summary>

@@ -43,10 +43,12 @@ public sealed class RunRequestTests
     [Fact]
     public void AliasTablePointsOnlyAtCanonicalTokens()
     {
-        // Seven model_spec tokens beyond the fourteen canonical ones (upstream's
-        // task vocabulary; "codec" was removed there in #544). If the native parser
+        // Nine model_spec tokens beyond the seventeen canonical ones (upstream's
+        // task vocabulary; "codec" was removed there in #544, and v0.9.2 added
+        // turn/wake/cls — of which only wake_word/classify are non-canonical
+        // spellings, "turn" is its own alias upstream). If the native parser
         // and this table disagree a model silently becomes unreachable.
-        Assert.Equal(7, AudioCppTaskKinds.Aliases.Count);
+        Assert.Equal(9, AudioCppTaskKinds.Aliases.Count);
         Assert.All(AudioCppTaskKinds.Aliases.Values,
             canonical => Assert.Contains(canonical, AudioCppTaskKinds.Canonical));
     }
@@ -247,7 +249,7 @@ public sealed class RunRequestTests
     public void FallbackCatalogCoversEveryCanonicalToken()
     {
         // A caller on a shim that predates the task catalog must still see all
-        // fourteen tasks, or it would wrongly conclude a task is unsupported.
+        // seventeen tasks, or it would wrongly conclude a task is unsupported.
         Assert.Equal(AudioCppTaskKinds.Canonical, AudioCppTaskCatalog.Fallback.Select(task => task.Task));
         Assert.All(AudioCppTaskCatalog.Fallback,
             task => Assert.Contains(task.Input, new[] { "audio", "text", "audio+text" }));

@@ -27,12 +27,27 @@
 #include <vector>
 
 namespace {
-constexpr const char * kCommit = "f825d1d1b92af309585aeb656b2a59c44fc603eb";
+// Upstream commit this shim was compiled against. Kept in one place: the CMake
+// pin check (CMakeLists.txt), the ABI smoke test, the managed integration test
+// and eng/upstream.lock.json all assert the same value, and
+// eng/packaging/stage-native.ps1 reads it back out of the built library.
+constexpr const char * kCommit = "22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8";
 #ifdef AUDIOCPP_DOTNET_BACKEND
 constexpr const char * kBackend = AUDIOCPP_DOTNET_BACKEND;
 #else
 constexpr const char * kBackend = "unknown";
 #endif
+
+// cJSON_ParseWithLengthOpts writes its error position into a *global* even when
+// return_parse_end is supplied (upstream io/json.cpp). Every shim entry point
+// parses caller-supplied JSON (options, artifacts, batch requests), and a
+// managed host may call the shim from several threads at once, so opt into
+// upstream's mutex-serialized parse path when this library loads. The toggle is
+// one-way by upstream design and costs one mutex per parse.
+[[maybe_unused]] const bool g_serialized_json_parsing = [] {
+    engine::io::json::enable_serialized_json_parsing();
+    return true;
+}();
 
 void set_error(char * buffer, size_t length, const char * message) noexcept {
     if (buffer != nullptr && length != 0) {
@@ -78,6 +93,11 @@ char * copy_string(const std::string & value) {
 // f825d1d1 exposes the vocabulary as a public API, so the tables below only
 // carry the descriptions audiocpp_get_task_catalog adds on top (input shape and
 // typical result channels). Tokens and aliases always come from upstream.
+// Pin 22cad6af5 (v0.9.2) added TurnDetection/WakeWord/AudioClassification to
+// both the enum and the vocabulary, so the table grows by three rows; the
+// "typical_outputs" values mirror what those loaders actually fill (smart_turn
+// and ast_audioset emit TaskResult::custom_schema_output, the wake-word
+// detectors emit speech_segments).
 struct TaskDescriptor {
     engine::runtime::VoiceTaskKind kind;
     const char * input;            // audio | text | audio+text
@@ -99,6 +119,9 @@ constexpr TaskDescriptor kTaskCatalog[] = {
     {engine::runtime::VoiceTaskKind::SpeakerRecognition, "audio", "artifact_output"},
     {engine::runtime::VoiceTaskKind::Svc, "audio+text", "audio_output"},
     {engine::runtime::VoiceTaskKind::Midi, "audio", "artifact_output"},
+    {engine::runtime::VoiceTaskKind::TurnDetection, "audio", "custom_schema_output"},
+    {engine::runtime::VoiceTaskKind::WakeWord, "audio", "speech_segments"},
+    {engine::runtime::VoiceTaskKind::AudioClassification, "audio", "custom_schema_output"},
 };
 
 const TaskDescriptor * task_descriptor(engine::runtime::VoiceTaskKind kind) {
@@ -524,7 +547,13 @@ void write_stream_event_json(std::ostringstream & json, const engine::runtime::S
     for (size_t i = 0; i < event.word_timestamps.size(); ++i) { if (i) json << ','; write_word_timestamp_json(json, event.word_timestamps[i]); }
     json << "],\"output_artifacts\":[";
     for (size_t i = 0; i < event.output_artifacts.size(); ++i) { if (i) json << ','; write_artifact_json(json, event.output_artifacts[i]); }
-    json << "],\"is_final\":" << (event.is_final ? "true" : "false") << '}';
+    // Revisable whole-transcript hypothesis (upstream v0.9.x). Opt-in per model:
+    // when the loader fills it, clients replace their provisional display;
+    // partial_text stays append-only committed text.
+    json << "],\"partial_text_snapshot\":";
+    if (event.partial_text_snapshot.has_value()) write_transcript_json(json, *event.partial_text_snapshot);
+    else json << "null";
+    json << ",\"is_final\":" << (event.is_final ? "true" : "false") << '}';
 }
 
 // Emitted by both audiocpp_model_run_json_ex and audiocpp_stream_finish; keep the
@@ -550,7 +579,18 @@ void write_task_result_json(std::ostringstream & json, const engine::runtime::Ta
     for (size_t i = 0; i < result.speaker_turns.size(); ++i) { if (i) json << ','; write_speaker_turn_json(json, result.speaker_turns[i]); }
     json << "],\"word_timestamps\":[";
     for (size_t i = 0; i < result.word_timestamps.size(); ++i) { if (i) json << ','; write_word_timestamp_json(json, result.word_timestamps[i]); }
-    json << "],\"artifact_output\":";
+    // Model-defined structured payload (schema id + free-form JSON data).
+    // Upstream added the channel at v0.9.x for loaders whose result is neither
+    // text nor audio: smart_turn emits {"complete","probability"} under
+    // "smart_turn.v1", ast_audioset emits {"scores":[…]} under
+    // "ast_audioset.classification.v1". Serialized verbatim so new schemas need
+    // no shim change.
+    json << "],\"custom_schema_output\":";
+    if (result.custom_schema_output.has_value()) {
+        json << "{\"schema\":\"" << json_escape(result.custom_schema_output->schema) << "\",\"data\":"
+             << engine::io::json::stringify(result.custom_schema_output->data) << "}";
+    } else json << "null";
+    json << ",\"artifact_output\":";
     if (result.artifact_output.has_value()) write_artifact_json(json, *result.artifact_output);
     else json << "null";
     json << ",\"output_artifacts\":[";
@@ -736,7 +776,7 @@ AUDIOCPP_API int32_t audiocpp_get_abi_info(audiocpp_abi_info * out_info, char * 
     }
     out_info->abi_major = 1;
     out_info->abi_minor = 4;
-    out_info->shim_version = "audiocpp-dotnet-shim 0.5.0";
+    out_info->shim_version = "audiocpp-dotnet-shim 0.6.0";
     out_info->audio_cpp_commit = kCommit;
     out_info->backend = kBackend;
     uint64_t capabilities = AUDIOCPP_CAP_SYNTHESIZE |
