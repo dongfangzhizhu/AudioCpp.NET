@@ -132,11 +132,19 @@ def tree_entries(repo: pathlib.Path, sha: str) -> dict[str, tuple[str, str]]:
 def commit_meta(repo: pathlib.Path, sha: str) -> dict:
     raw = git(repo, "log", "-1",
               "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%cI%x00%H%x00%B", sha).split("\0")
+    # GitHub 的 POST /git/commits 对 message **原样存储、不补尾随换行**，而 git 对象
+    # 的消息以 \n 结尾。%B 输出 = body（含其尾 \n）+ log 记录终止 \n，因此只能去掉
+    # 终止符那一个 \n、保留 body 原样；早先的 rstrip("\n") 把 body 的尾 \n 也删了，
+    # 远端 commit 与本地 SHA 必不符（实测：本地 2dad606a vs 远端 7d4108aa，差异正是
+    # 消息末尾一个换行——本地对象去掉尾 \n 重算即得远端 SHA）。
+    msg = raw[7]
+    if msg.endswith("\n"):
+        msg = msg[:-1]
     return {
         "author": {"name": raw[0], "email": raw[1], "date": raw[2]},
         "committer": {"name": raw[3], "email": raw[4], "date": raw[5]},
         "sha": raw[6],
-        "message": raw[7].rstrip("\n"),
+        "message": msg,
     }
 
 

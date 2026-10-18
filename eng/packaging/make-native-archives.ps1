@@ -26,6 +26,12 @@ param(
 
 $ErrorActionPreference = "Continue"
 
+# Normalise the backend list: under `powershell -File` the token "-Backends cpu,cuda"
+# arrives as the single literal string "cpu,cuda" (no array-literal parsing), which the
+# archiveSuffix lookup below would reject as an unknown backend. Splitting on commas makes
+# -File and -Command (array literal) invocation behave identically.
+$Backends = @($Backends | ForEach-Object { $_ -split ',' } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 Set-Location $repo
 
