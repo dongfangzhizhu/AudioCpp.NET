@@ -74,12 +74,13 @@ def get_token() -> str:
     die("没有 GITHUB_TOKEN/GH_TOKEN，且 git credential fill 也没取到令牌")
 
 
-def api(token: str, method: str, path: str, body=None, raw: bool = False, retries: int = 6):
+def api(token: str, method: str, path: str, body=None, raw: bool = False,
+        accept: str = "application/vnd.github+json", retries: int = 6):
     url = path if path.startswith("http") else API + path
     data = json.dumps(body).encode() if body is not None else None
     headers = {
         "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
+        "Accept": accept,
         "User-Agent": UA,
     }
     if data is not None:
@@ -162,9 +163,11 @@ def main() -> int:
     merged_entries: list[dict] = []
     man_asset = existing_assets.get("audiocpp-native-manifest.json")
     if man_asset is not None:
+        # 注意：release asset 下载端点必须 Accept: application/octet-stream，
+        # 否则返回的是资产元数据 JSON（无 archives 键），会被误读成 0 条目。
         st, blob = api(token, "GET",
                        f"/repos/{owner}/{name}/releases/assets/{man_asset['id']}",
-                       raw=True)
+                       raw=True, accept="application/octet-stream")
         try:
             old = json.loads(blob)
             merged_entries = list(old.get("archives", []))
