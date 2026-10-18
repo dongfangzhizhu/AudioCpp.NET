@@ -95,6 +95,17 @@ jobs:
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cuda-toolkit-13-3
+          # runner 无 NVIDIA 驱动，而 libaudiocpp_dotnet_native.so 的 DT_NEEDED
+          # 含 libcuda.so.1（ggml-cuda 的 VMM 代码用驱动 API，随工具包安装的
+          # cuda-driver-dev 只把 stub 放在 targets/x86_64-linux/lib/stubs/，
+          # 不在标准库路径）。链到标准路径：链接期可解析 cuMemCreate 等符号，
+          # 运行期 abi_smoke 只查 ABI 信息不调驱动 API，stub 不会被调用。
+          # 消费者机器有真实驱动，/usr/lib/x86_64-linux-gnu/libcuda.so.1 由
+          # 驱动提供，不受此软链影响。
+          STUB=$(ls -1d /usr/local/cuda-*/targets/x86_64-linux/lib/stubs/libcuda.so 2>/dev/null | sort -V | tail -1)
+          test -n "$STUB" || { echo "no libcuda stub under /usr/local/cuda-*"; exit 1; }
+          sudo ln -sf "$STUB" /usr/lib/x86_64-linux-gnu/libcuda.so.1
+          echo "libcuda.so.1 -> $STUB"
           NVCC=$(command -v nvcc || true)
           if [ -z "$NVCC" ]; then
             NVCC=$(ls -1d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V | tail -1 || true)
