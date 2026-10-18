@@ -199,7 +199,7 @@ def main() -> int:
         merged_entries.append(e)
     merged = dict(local)
     merged["archives"] = merged_entries
-    merged["builtAtUtc"] = time.strftime("%Y-%m-%dT%H:%M:%S.0000000Z", time.gmtime())
+    merged["builtAtUtc"] = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{time.time_ns() % 1_000_000_000:09d}Z"
     info(f"合并后 manifest：pin={merged.get('audioCppCommit', '?')[:12]} "
          f"条目 {len(merged_entries)} 个: "
          + ", ".join(f"{e['rid']}/{e['backend']}" for e in merged_entries))

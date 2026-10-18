@@ -79,10 +79,11 @@ jobs:
           gcc --version | head -1
 
       # CUDA is only needed for the cuda backend. ubuntu-latest no longer ships the
-      # toolkit (the image moved), so install one that supports sm_89 (Ada) from
-      # NVIDIA's network repo. It lands in /usr/local/cuda-12.4, which the locate
-      # glob below finds. cudart is linked statically into the shim, so the toolkit
-      # version creates no runtime dependency for consumers.
+      # toolkit (the image moved), so install one from NVIDIA's network repo. 13.3 is
+      # the version the Windows cuda archive was built with, keeping both platforms on
+      # the same toolkit. It lands in /usr/local/cuda-13.3, which the locate glob
+      # below finds. cudart is linked statically into the shim, so the toolkit version
+      # creates no runtime dependency for consumers.
       - name: Install and locate the CUDA toolkit
         if: inputs.backend == 'cuda'
         shell: bash
@@ -93,7 +94,7 @@ jobs:
           wget -q "https://developer.download.nvidia.com/compute/cuda/repos/$CODENAME/x86_64/cuda-keyring_1.1-1_all.deb"
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cuda-toolkit-12-4
+          sudo apt-get install -y --no-install-recommends cuda-toolkit-13-3
           NVCC=$(command -v nvcc || true)
           if [ -z "$NVCC" ]; then
             NVCC=$(ls -1d /usr/local/cuda-*/bin/nvcc 2>/dev/null | sort -V | tail -1 || true)
