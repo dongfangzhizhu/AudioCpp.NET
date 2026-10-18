@@ -112,7 +112,7 @@ def sha256_file(p: pathlib.Path) -> str:
     return h.hexdigest()
 
 
-def linux_entry_from_zip(zip_path: pathlib.Path) -> dict:
+def linux_entry_from_zip(zip_path: pathlib.Path, backend: str = "cpu") -> dict:
     """从 CI artifact zip 里解出 .so，计算 manifest 条目（与 CI 的 pack 步骤同格式）。"""
     with zipfile.ZipFile(zip_path) as z:
         names = [n for n in z.namelist() if n.endswith(".so")]
@@ -120,7 +120,7 @@ def linux_entry_from_zip(zip_path: pathlib.Path) -> dict:
             die(f"{zip_path} 里应有且仅有 1 个 .so，实际: {names}")
         so_bytes = z.read(names[0])
     so_name = names[0]
-    rid, backend = "linux-x64", "cpu"
+    rid = "linux-x64"
     entry = {
         "rid": rid,
         "backend": backend,
@@ -141,6 +141,7 @@ def main() -> int:
     ap.add_argument("--tag", required=True, help="Release tag，如 v0.4.0")
     ap.add_argument("--archives", required=True, help="win archives 目录（含 zip 与 manifest）")
     ap.add_argument("--linux-zip", default="", help="linux archive zip（CI artifact）")
+    ap.add_argument("--linux-backend", default="cpu", help="linux zip 对应的后端（cpu/cuda/vulkan）")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     DRY = args.dry_run
@@ -186,7 +187,7 @@ def main() -> int:
     if linux_zip is not None:
         if not linux_zip.exists():
             die(f"linux zip 不存在: {linux_zip}")
-        le = linux_entry_from_zip(linux_zip)
+        le = linux_entry_from_zip(linux_zip, args.linux_backend)
         local_entries.append(le)
         info(f"linux 条目: {le['archive']}  lib={le['library_bytes']:,} B  "
              f"sha256={le['library_sha256'][:16]}…")
