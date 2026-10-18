@@ -101,6 +101,10 @@ jobs:
           fi
           test -n "$NVCC" || { echo "no CUDA toolkit on this runner after install"; exit 1; }
           echo "NVCC=$NVCC" >> "$GITHUB_ENV"
+          # enable_language(CUDA) 只认 PATH 里的 nvcc（不读 $NVCC），
+          # 必须把 bin 目录加进 GITHUB_PATH，否则 configure 报
+          # "No CMAKE_CUDA_COMPILER could be found"。
+          echo "$(dirname "$NVCC")" >> "$GITHUB_PATH"
           echo "nvcc: $NVCC"
           "$NVCC" --version | tail -2
 
