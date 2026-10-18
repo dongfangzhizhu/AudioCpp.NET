@@ -113,9 +113,19 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends glslc libvulkan-dev
+          # spirv-headers 必须显式安装：glslc/libvulkan-dev 都不带
+          # spirv/unified1/spirv.hpp，而 ggml-vulkan.cpp 的 __has_include 链
+          # 需要它（spv::OpCodeMask 等常量）。runner 上曾解析到某个不含 spv
+          # 命名空间的旧头导致编译失败，装上后若仍有影子头文件，下面的诊断会暴露。
+          sudo apt-get install -y --no-install-recommends glslc libvulkan-dev spirv-headers
           glslc --version | head -2
           pkg-config --modversion vulkan
+          echo "spirv header resolution:"
+          for p in /usr/local/include/spirv/unified1/spirv.hpp /usr/include/spirv/unified1/spirv.hpp; do
+            if [ -f "$p" ]; then
+              echo "  $p -> $(grep -c 'namespace spv' "$p" || true) spv-namespace hits"
+            fi
+          done
 
       - name: Configure (full model set)
         shell: bash
