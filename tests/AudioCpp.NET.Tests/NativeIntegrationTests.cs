@@ -84,7 +84,7 @@ public sealed class NativeIntegrationTests
         Assert.Equal(1u, info.AbiMajor);
         Assert.True(info.AbiMinor >= 4, $"the wrappers need structured-result schema 3 / abi 1.4+, reported 1.{info.AbiMinor}");
         Assert.False(string.IsNullOrWhiteSpace(info.ShimVersion));
-        Assert.Equal("22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8", info.AudioCppCommit);
+        Assert.Equal("be3d36ed7315260e5a9752f7e8e3e0de9af18567", info.AudioCppCommit);
 
         foreach (var (bit, name) in new (ulong Bit, string Name)[]
         {

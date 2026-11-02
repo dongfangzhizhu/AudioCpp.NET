@@ -30,7 +30,7 @@ GitHub API 的日期字段一律归一化成 UTC（Z），而 commit 对象里�
 
 用法：
     python import-upstream-history.py --repo D:/SouceCode/python2net/audio/audio.cpp \
-        --to 22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8 [--tags v0.9.0 v0.9.1 v0.9.2]
+        --to be3d36ed7315260e5a9752f7e8e3e0de9af18567 [--tags v0.9.0 v0.9.1 v0.9.2 v0.9.3]
 
 令牌从 Git Credential Manager 取（git credential fill），不落盘。
 """

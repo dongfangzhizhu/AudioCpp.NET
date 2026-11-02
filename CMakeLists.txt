@@ -6,7 +6,7 @@ set(AUDIOCPP_BACKEND "cpu" CACHE STRING "cpu|cuda|vulkan|hip|metal")
 set(AUDIOCPP_MODEL_SET "full" CACHE STRING "audio.cpp model set")
 set(AUDIOCPP_MODELS "" CACHE STRING "Models for the custom model set")
 option(AUDIOCPP_DOTNET_ENABLE_MODEL_MANAGER "Enable native model catalog and downloader" ON)
-set(AUDIOCPP_PINNED_COMMIT "22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8")
+set(AUDIOCPP_PINNED_COMMIT "be3d36ed7315260e5a9752f7e8e3e0de9af18567")
 
 execute_process(
   COMMAND git -C "${AUDIOCPP_SRC}" rev-parse HEAD

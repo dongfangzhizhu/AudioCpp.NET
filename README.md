@@ -2,9 +2,9 @@
 
 .NET 10 bindings for [audio.cpp](https://github.com/0xShug0/audio.cpp), using a small versioned C ABI shim over `engine_runtime`.
 
-> Status: wraps every model family the pinned engine defines — 123 `model_specs`
-> families produce 123 linked loaders and a 125-entry catalog (123 + 2 built-in VADs),
-> with 384 downloadable packages. Verified on four platform cells:
+> Status: wraps every model family the pinned engine defines — 134 `model_specs`
+> families produce 137 linked loaders and a 137-entry catalog (134 + 3 bundled VADs),
+> with 421 downloadable packages. Verified on four platform cells:
 > Windows/Linux × CPU/CUDA, plus Windows/Linux × Vulkan. See
 > [`docs/verification/release-readiness.md`](docs/verification/release-readiness.md)
 > for the evidence. The upstream source is pinned; this repository never builds an
@@ -32,7 +32,7 @@ dotnet run --project src/AudioCpp.NET.Console -- models download <id> --models-d
 ## Pinned upstream
 
 - Repository: `https://github.com/0xShug0/audio.cpp`
-- Commit: `22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8` (`v0.9.2-4-g22cad6af`)
+- Commit: `be3d36ed7315260e5a9752f7e8e3e0de9af18567` (`v0.9.3-60-gbe3d36ed`)
 - Lock file: [`eng/upstream.lock.json`](eng/upstream.lock.json)
 - License: Apache-2.0 (Copyright 2026 ShugoAI LLC) — see [`NOTICE`](NOTICE)
 
@@ -244,7 +244,7 @@ cmake -S . -B build/native-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
 cmake --build build/native-cpu --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke audiocpp_dotnet_e2e --parallel
 ```
 
-`AUDIOCPP_MODEL_SET` accepts `full` (all 123 families, the default and what releases
+`AUDIOCPP_MODEL_SET` accepts `full` (all 134 families, the default and what releases
 use), `core` (engine only, no model loaders — used by the CI ABI gate) and `custom`
 (an explicit `-DAUDIOCPP_MODELS=...` list).
 

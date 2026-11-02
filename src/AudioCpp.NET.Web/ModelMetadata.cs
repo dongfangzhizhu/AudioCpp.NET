@@ -29,13 +29,14 @@ internal sealed record ModelMetadata(string? Family, string Category, string Tas
 
     private sealed class SpecIndex
     {
-        /// <summary>The two built-in VAD loaders are linked into every build and have no
+        /// <summary>The three built-in VAD loaders are linked into every build and have no
         /// model_spec of their own. Classifying them here keeps them out of "unknown",
         /// which is reserved for genuinely unrecognised families.</summary>
         private static readonly Dictionary<string, string> BuiltinFamilies = new(StringComparer.OrdinalIgnoreCase)
         {
             ["silero_vad"] = "speech_analysis",
             ["marblenet_vad"] = "speech_analysis",
+            ["earshot_vad"] = "speech_analysis",
         };
 
         private readonly Dictionary<string, Entry> _byPackageId = new(StringComparer.OrdinalIgnoreCase);

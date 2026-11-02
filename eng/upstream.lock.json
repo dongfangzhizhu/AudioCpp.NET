@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/0xShug0/audio.cpp",
-  "commit": "22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8",
-  "shortCommit": "22cad6af5043",
+  "commit": "be3d36ed7315260e5a9752f7e8e3e0de9af18567",
+  "shortCommit": "be3d36ed7315",
   "branchAtPin": "main",
-  "describeAtPin": "v0.9.2-4-g22cad6af",
-  "pinnedAtUtc": "2026-10-17T09:07:19.2189685Z",
+  "describeAtPin": "v0.9.3-60-gbe3d36ed",
+  "pinnedAtUtc": "2026-11-02T07:53:02.5513821Z",
   "shimAbi": {
     "major": 1,
     "minor": 4
@@ -20,9 +20,9 @@
       "core",
       "custom"
     ],
-    "modelFamilies": 123,
+    "modelFamilies": 134,
     "modelManagerDefault": "on",
     "portableCpu": true,
-    "notes": "Values at pin 22cad6af5 (v0.9.2-4-g22cad6af, 2026-10-17 win-cpu full build): 123 model_specs families -> 123 linked loaders, catalog 125 entries (123 + 2 built-in VADs), 384 downloadable packages. ABI stays 1.4; the batched run entry point (audiocpp_model_run_json_batch, AUDIOCPP_CAP_BATCH) and list-valued run options routed to TaskRequest::option_arrays (AUDIOCPP_CAP_OPTION_ARRAYS) are unchanged; task token/alias resolution is delegated to upstream's public task vocabulary (task_vocabulary.h, #544). v0.9.2 adds VoiceTaskKind TurnDetection/WakeWord/AudioClassification (tokens turn/wake/cls; spec aliases wake_word/classify), TaskResult::custom_schema_output, StreamEvent::partial_text_snapshot and engine::io::json::enable_serialized_json_parsing(); structured-result schema goes 2 -> 3 (additive, optional fields only) and the shim reports 0.6.0. Loader/catalog counts re-verified at release time."
+    "notes": "Values at pin be3d36ed7 (v0.9.3-60-gbe3d36ed, 2026-11-02 win-cpu full build): 134 model_specs families -> 137 linked loaders (134 + 3 bundled VADs: silero_vad, marblenet_vad, earshot_vad), catalog 137 entries, 421 downloadable packages, 17 tasks. ABI stays 1.4 and the shim still reports 0.6.0: the shim's direct dependency surface (core/backend.h, core/module.h, io/json.h, package_manager/manager.h, runtime/{registry,session,task_vocabulary}.h) changed only additively -- BackendConfig::impl, BackendType::WebGPU, ModuleBuildContext::elide_identity_reshapes, BackendDeviceInfo PCI/memory/caps plus list_backend_devices(bool), PackageManager::package_info, ModelRegistry::resolve_package_load/model_resources and load_vad_model() are new; io/json.h, runtime/session.h and runtime/task_vocabulary.h are unchanged. v0.9.3 adds the WebGPU backend (native and browser), backend implementation selection, --list-devices --json, LoRA/weight adapters (WeightAdapter replaces LoraTensorSource), model-owned package load resolvers, disk expert weight store, NEON kernels and 11 new families (gradium_phonon, latentsync, lfm3_audio, magenta_realtime_2, ming3_audio, ming3_tts, nemotron_transcribe, open_wake_word, plapre, soulx_flashhead, xtts_v2). Loader/catalog counts re-verified at release time."
   }
 }

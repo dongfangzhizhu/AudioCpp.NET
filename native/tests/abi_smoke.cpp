@@ -32,7 +32,7 @@ int main() {
         return 1;
     }
     if (info.abi_major != 1 || info.abi_minor != 4) return 2;
-    if (std::strcmp(info.audio_cpp_commit, "22cad6af5043a2d7c7f1d9a0e6c9d7996a80dfc8") != 0) return 3;
+    if (std::strcmp(info.audio_cpp_commit, "be3d36ed7315260e5a9752f7e8e3e0de9af18567") != 0) return 3;
     if (info.shim_version == nullptr || info.backend == nullptr) return 4;
     const uint64_t required = AUDIOCPP_CAP_SYNTHESIZE | AUDIOCPP_CAP_TRANSCRIBE |
         AUDIOCPP_CAP_STRUCTURED_RESULTS | AUDIOCPP_CAP_STREAMING |
