@@ -357,10 +357,19 @@ jobs:
               gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$old" >/dev/null
               echo "  replaced existing $name"
             fi
-            gh api --method POST \
-              "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name" \
-              --header "Content-Type: $ctype" \
-              --input "$path" >/dev/null
+            # 资产上传只存在于 uploads.github.com，api.github.com 上同一个路径返回
+            # 404 "Not Found"（不是 401/403，所以看起来像 release 不存在）。
+            # `gh api` 固定打 api.github.com，--hostname uploads.github.com 又会让
+            # gh 去找那个主机的凭据，所以这一步用 curl 直连上传主机。
+            # 同一条规则在 eng/release/attach-archives.py 里已经踩过一次
+            # （那里常量就叫 UPLOADS）。
+            curl -sS --fail-with-body -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: $ctype" \
+              --data-binary "@$path" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name" \
+              >/dev/null
             echo "  uploaded $name ($(stat -c%s "$path") B)"
           }
           upload_asset "$FILE"
