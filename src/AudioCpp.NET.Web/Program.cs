@@ -6,6 +6,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = 64 * 1024 * 1024);
 builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = 32 * 1024 * 1024);
 builder.Services.AddSingleton<AudioCppWorkbench>();
+// Pure HTTP downloads: no native shim calls, so they never contend with the
+// workbench's single native lock and can run alongside an inference request.
+builder.Services.AddSingleton<WeightDownloadService>();
 
 // A published build launched from an arbitrary directory still has to find its
 // static assets: fall back to the app base directory when the content root has no wwwroot.
@@ -38,6 +41,30 @@ app.MapGet("/api/stream/policy", (HttpRequest request, AudioCppWorkbench workben
 app.MapPost("/api/tts", (HttpRequest request, AudioCppWorkbench workbench) => workbench.SynthesizeAsync(request));
 app.MapGet("/api/audio/{fileName}", (string fileName, AudioCppWorkbench workbench) => workbench.GetAudio(fileName));
 
+// ── Resumable weight downloads ────────────────────────────────────────────
+// The catalog comes from the pinned model_specs; every transfer is chunked with
+// HTTP Range into a .part file, so a pause, cancel, dropped connection or process
+// restart can continue from the bytes already on disk. The /test endpoints drive
+// the same code path against a deterministic local blob for repeatable drills.
+app.MapGet("/api/weights/packages", (WeightDownloadService weights) => weights.ListPackages());
+app.MapPost("/api/weights/download", (WeightDownloadRequest request, WeightDownloadService weights) =>
+    weights.Start(request));
+app.MapGet("/api/weights/jobs", (WeightDownloadService weights) => weights.ListJobs());
+app.MapGet("/api/weights/jobs/{jobId}", (string jobId, WeightDownloadService weights) => weights.GetJob(jobId));
+app.MapPost("/api/weights/jobs/{jobId}/pause", (string jobId, WeightDownloadService weights) => weights.Pause(jobId));
+app.MapPost("/api/weights/jobs/{jobId}/resume", (string jobId, WeightDownloadService weights) => weights.Resume(jobId));
+app.MapPost("/api/weights/jobs/{jobId}/cancel", (string jobId, WeightDownloadService weights) => weights.Stop(jobId, false));
+app.MapPost("/api/weights/jobs/{jobId}/interrupt", (string jobId, WeightDownloadService weights) => weights.Stop(jobId, true));
+app.MapGet("/api/weights/config", (WeightDownloadService weights) => weights.GetConfig());
+app.MapPost("/api/weights/config", (WeightConfigRequest request, WeightDownloadService weights) => weights.SetConfig(request));
+app.MapPost("/api/weights/test/start", (WeightTestRequest request, HttpRequest http, WeightDownloadService weights) =>
+    weights.StartTest(http, request));
+app.MapGet("/api/weights/test/verify", (string path, WeightDownloadService weights, long size = 0, int seed = 42) =>
+    weights.Verify(path, size, seed));
+app.MapPost("/api/weights/test/clean", (WeightDownloadService weights) => weights.CleanTests());
+app.MapMethods("/api/weights/test-source/{**path}", new[] { "GET", "HEAD" },
+    (HttpContext context) => WeightTestSource.ServeAsync(context));
+
 app.UseExceptionHandler(handler => handler.Run(async context =>
 {
     var error = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
@@ -65,6 +92,8 @@ internal sealed class AudioCppWorkbench
         Environment.GetEnvironmentVariable("HF_ENDPOINT") ?? "https://hf-mirror.com");
 
     internal WorkbenchConfiguration GetConfiguration() => _configuration;
+    internal string ModelsDirectory => _configuration.ModelsDirectory;
+    internal string HuggingFaceEndpoint => _configuration.HuggingFaceEndpoint;
 
     internal WorkbenchConfiguration Configure(WorkbenchConfiguration configuration)
     {

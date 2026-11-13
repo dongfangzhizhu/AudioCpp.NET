@@ -1020,6 +1020,185 @@ $("anyRunStream").addEventListener("click", () => {
     renderStreamResult);
 });
 
+/* ── resumable weight downloads / resume drill ── */
+let weightJobId = null;
+let weightPoll = null;
+let weightLastState = null;
+let weightVerified = false;
+let weightDrill = [];
+let weightAutoResume = false;
+
+function drill(line) {
+  weightDrill.push(line);
+  if (weightDrill.length > 14) weightDrill.shift();
+  $("weightTestLog").textContent = weightDrill.join("\n");
+}
+
+function stopWeightPoll() {
+  if (weightPoll) clearInterval(weightPoll);
+  weightPoll = null;
+}
+
+async function loadWeightPackages() {
+  try {
+    const data = await api("/api/weights/packages");
+    const select = $("weightPackage");
+    select.replaceChildren();
+    for (const pkg of data.packages || []) {
+      const option = document.createElement("option");
+      option.value = pkg.id;
+      option.textContent = `${pkg.id} · ${pkg.family}`;
+      option.title = `${pkg.repo}@${pkg.revision} · ${pkg.files.length} 个权重文件`;
+      select.append(option);
+    }
+    $("weightPackageCount").textContent =
+      `${data.count || 0} 可下载包 · ${data.endpoint || "endpoint ?"}`;
+    if (!data.count) log("amber", "权重目录为空：model_specs 未随构建复制到输出目录");
+  } catch (err) {
+    $("weightPackageCount").textContent = "unavailable";
+    log("err", `权重目录加载失败：${err.message}`);
+  }
+}
+
+function renderWeightJob(job) {
+  const total = Number(job.bytesTotal || 0);
+  const done = Number(job.bytesDownloaded || 0);
+  const pct = total > 0 ? Math.min(100, (done / total) * 100) : 0;
+  $("weightBar").style.width = `${pct}%`;
+  const file = (job.files || [])[0];
+  const lines = [
+    `state    : ${job.state}`,
+    `job      : ${job.jobId}`,
+    `progress : ${formatBytes(done)} / ${total ? formatBytes(total) : "?"}  (${pct.toFixed(1)}%)`,
+    `speed    : ${formatBytes(job.speedBytesPerSecond || 0)}/s`,
+    `ranges   : ${job.rangeRequests}  ·  resume: ${job.resumeCount}  ·  restart: ${job.fullRestarts}`,
+  ];
+  if (file) {
+    lines.push(`file     : ${file.name}`);
+    lines.push(`offset   : ${file.resumedFrom || 0} 字节续传起点 · 该文件 ${file.rangeRequests} 次 Range`);
+  }
+  if (job.message) lines.push(`message  : ${job.message}`);
+  $("weightStatus").textContent = lines.join("\n");
+
+  if (job.source === "test" && job.state !== weightLastState) {
+    weightLastState = job.state;
+    drill(`[${job.state}] ${formatBytes(done)} / ${formatBytes(total)}` +
+      ` · Range ${job.rangeRequests} 次` +
+      (file?.resumedFrom ? ` · 从 ${file.resumedFrom} 字节续传` : "") +
+      (job.message ? ` · ${job.message}` : ""));
+  }
+  return job;
+}
+
+async function refreshWeightJob() {
+  if (!weightJobId) return;
+  try {
+    const job = await api(`/api/weights/jobs/${weightJobId}`);
+    renderWeightJob(job);
+    if (job.source === "test" && job.state === "completed" && !weightVerified) {
+      weightVerified = true;
+      const file = job.files?.[0];
+      try {
+        const verify = await api(`/api/weights/test/verify?path=${encodeURIComponent(file.path)}` +
+          `&size=${file.bytesTotal}&seed=${job.seed}`);
+        drill(verify.valid
+          ? `✅ 逐字节校验通过（${formatBytes(verify.bytes)}）：断点续传拼接无损`
+          : `❌ 校验失败：${verify.reason} @ ${verify.firstMismatch ?? "-"}`);
+        log(verify.valid ? "ok" : "err", verify.valid ? "权重续传演练校验通过" : "权重续传演练校验失败");
+      } catch (err) { drill(`校验请求失败：${err.message}`); }
+    }
+    // One-click drill: a dropped connection leaves a .part file behind, so
+    // automatically issue the Range resume instead of asking for a second click.
+    // Manual "模拟断线" deliberately leaves the job stopped for inspection.
+    if (weightAutoResume && job.source === "test" &&
+        ["failed", "interrupted"].includes(job.state) &&
+        Number(job.bytesDownloaded || 0) > 0 &&
+        Number(job.bytesDownloaded) < Number(job.bytesTotal || 0)) {
+      weightAutoResume = false;
+      drill(`⚡ 连接中断，已保留 ${formatBytes(job.bytesDownloaded)}，自动发起 Range 续传…`);
+      try {
+        const resumed = await api(`/api/weights/jobs/${weightJobId}/resume`, { method: "POST" });
+        renderWeightJob(resumed);
+        drill(`▶ 自动续传已启动：${resumed.state}`);
+        return;
+      } catch (err) { drill(`自动续传失败：${err.message}`); }
+    }
+    if (["completed", "failed", "interrupted", "cancelled", "paused"].includes(job.state)) stopWeightPoll();
+  } catch (err) {
+    drill(`状态查询失败：${err.message}`);
+    stopWeightPoll();
+  }
+}
+
+function trackWeightJob(job, drillText, resetDrill = false, autoResume = false) {
+  weightJobId = job.jobId;
+  weightLastState = job.state;
+  weightVerified = false;
+  weightAutoResume = autoResume;
+  if (resetDrill) weightDrill = [];
+  if (drillText) drill(drillText);
+  renderWeightJob(job);
+  stopWeightPoll();
+  weightPoll = setInterval(refreshWeightJob, 400);
+}
+
+$("weightStart").addEventListener("click", async () => {
+  const packageId = $("weightPackage").value;
+  if (!packageId) { showError("请先选择模型包"); return; }
+  try {
+    const job = await api("/api/weights/download", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ packageId, overwrite: false }),
+    });
+    log("amber", `开始下载权重 ${packageId}（后台 HTTP Range 下载，不占用 native runtime）`);
+    trackWeightJob(job);
+  } catch (err) { showError(`下载失败：${err.message}`); }
+});
+
+async function weightAction(action) {
+  if (!weightJobId) { showError("当前没有下载任务"); return; }
+  try {
+    const job = await api(`/api/weights/jobs/${weightJobId}/${action}`, { method: "POST" });
+    trackWeightJob(job, job.source === "test" ? `▶ ${action}：${job.state}` : null);
+    log("info", `下载任务 ${action} → ${job.state}`);
+  } catch (err) { showError(`${action} 失败：${err.message}`); }
+}
+
+$("weightPause").addEventListener("click", () => weightAction("pause"));
+$("weightResume").addEventListener("click", () => weightAction("resume"));
+$("weightCancel").addEventListener("click", () => weightAction("cancel"));
+$("weightInterrupt").addEventListener("click", () => weightAction("interrupt"));
+
+$("weightTestStart").addEventListener("click", async () => {
+  const size = Number($("weightTestSize").value) || 8388608;
+  const abortAt = Number($("weightTestAbort").value) || 0;
+  stopWeightPoll();
+  if (weightJobId) {
+    try { await api(`/api/weights/jobs/${weightJobId}/cancel`, { method: "POST" }); } catch { /* already stopped */ }
+  }
+  try {
+    await api("/api/weights/test/clean", { method: "POST" });
+    const job = await api("/api/weights/test/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sizeBytes: size, seed: 42, abortAtByte: abortAt,
+        maxChunkBytes: 256 * 1024, chunkBytes: 1024 * 1024,
+      }),
+    });
+    log("amber", `续传演练启动：${formatBytes(size)}` + (abortAt ? `，将在第 ${abortAt} 字节断开` : "（不断流）"));
+    trackWeightJob(job, `▶ 演练启动：${formatBytes(size)}` +
+      (abortAt ? ` · 计划在第 ${abortAt} 字节断流并自动续传` : ""), true, abortAt > 0);
+  } catch (err) { showError(`演练启动失败：${err.message}`); }
+});
+
+$("weightTestClean").addEventListener("click", async () => {
+  try {
+    const result = await api("/api/weights/test/clean", { method: "POST" });
+    drill(`已清理 ${result.removed} 个测试文件`);
+    log("info", `清理 ${result.removed} 个权重测试文件`);
+  } catch (err) { showError(`清理失败：${err.message}`); }
+});
+
 /* ── boot ── */
 (async () => {
   syncDecks();
@@ -1029,5 +1208,5 @@ $("anyRunStream").addEventListener("click", () => {
   } catch (err) {
     log("err", `读取配置失败：${err.message}`);
   }
-  await Promise.all([loadPackages(), loadModels(), loadCatalog()]);
+  await Promise.all([loadPackages(), loadModels(), loadCatalog(), loadWeightPackages()]);
 })();

@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "repository": "https://github.com/0xShug0/audio.cpp",
-  "commit": "be3d36ed7315260e5a9752f7e8e3e0de9af18567",
-  "shortCommit": "be3d36ed7315",
+  "repository": "https://github.com/dongfangzhizhu/audio.cpp",
+  "commit": "4be37c28f4f51c2b191c8587e38debd41c7dd626",
+  "shortCommit": "4be37c28f4f5",
   "branchAtPin": "main",
-  "describeAtPin": "v0.9.3-60-gbe3d36ed",
-  "pinnedAtUtc": "2026-11-02T07:53:02.5513821Z",
+  "describeAtPin": "v0.9.3-156-g4be37c28",
+  "pinnedAtUtc": "2026-11-12T22:17:41.6096291Z",
   "shimAbi": {
     "major": 1,
     "minor": 4
@@ -20,9 +20,9 @@
       "core",
       "custom"
     ],
-    "modelFamilies": 134,
+    "modelFamilies": 143,
     "modelManagerDefault": "on",
     "portableCpu": true,
-    "notes": "Values at pin be3d36ed7 (v0.9.3-60-gbe3d36ed, 2026-11-02 win-cpu full build): 134 model_specs families -> 137 linked loaders (134 + 3 bundled VADs: silero_vad, marblenet_vad, earshot_vad), catalog 137 entries, 421 downloadable packages, 17 tasks. ABI stays 1.4 and the shim still reports 0.6.0: the shim's direct dependency surface (core/backend.h, core/module.h, io/json.h, package_manager/manager.h, runtime/{registry,session,task_vocabulary}.h) changed only additively -- BackendConfig::impl, BackendType::WebGPU, ModuleBuildContext::elide_identity_reshapes, BackendDeviceInfo PCI/memory/caps plus list_backend_devices(bool), PackageManager::package_info, ModelRegistry::resolve_package_load/model_resources and load_vad_model() are new; io/json.h, runtime/session.h and runtime/task_vocabulary.h are unchanged. v0.9.3 adds the WebGPU backend (native and browser), backend implementation selection, --list-devices --json, LoRA/weight adapters (WeightAdapter replaces LoraTensorSource), model-owned package load resolvers, disk expert weight store, NEON kernels and 11 new families (gradium_phonon, latentsync, lfm3_audio, magenta_realtime_2, ming3_audio, ming3_tts, nemotron_transcribe, open_wake_word, plapre, soulx_flashhead, xtts_v2). Loader/catalog counts re-verified at release time."
+    "notes": "Values at pin 4be37c28 (v0.9.3-156-g4be37c28, synced 2026-11-13): 143 model_specs families, 446 downloadable packages (all huggingface_snapshot), 18 spec task tokens (new: sfx). Counts are static from the pinned model_specs tree; linked loader/catalog counts are re-measured from the shipping shim at release time (previous pin measured 137 = 134 + 3 bundled VADs). This pin is a fork merge commit: upstream 0xShug0/audio.cpp main 33ca47fc (93 commits past be3d36ed, 691 changed paths) merged into the fork, plus two local download fixes rebased onto the refactored src/framework/package_manager/http_util.cpp: HF_ENDPOINT fallback in huggingface_base_url() and enable_system_ca(true) in configure_client() for the Windows certificate store. repository therefore points at the fork so CI can fetch the exact SHA. Shim ABI stays 1.4 and the shim still reports 0.6.0: of the shim's direct dependency surface only core/module.h changed (BackendType::Sycl added, additive); io/json.h, core/backend.h, package_manager/manager.h and runtime/{registry,session,task_vocabulary}.h are unchanged. Upstream's public C ABI in include/audiocpp.h moved 0.2 -> 0.3 (new audiocpp_log_set), but the shim exports its own audiocpp_dotnet.h and does not consume that header. package_manager was split into http_util.cpp and Xet downloads (xet.cpp) while manager.h kept its API; new SYCL backend, RKNN ladder, shared DiT/MoE runtimes, PreparedGraph lifecycle and 9 new families (edda_asr, haas_asr, lfm_d1_omni, moss_soundeffect, mulacover, phonon2_asr, pocket_tts_small, realtime_reuse, underdog_bark3). Rebuild every supported RID/backend and re-run ABI, managed and model E2E tests before release."
   }
 }

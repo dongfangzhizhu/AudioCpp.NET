@@ -414,6 +414,29 @@ select.mono { font-family: var(--mono); font-size: 12.5px; }
 .loader-tasks { font: 11px var(--mono); color: var(--ink); overflow-wrap: anywhere; }
 .loader-flags { font: 10px var(--mono); color: var(--teal); text-align: right; white-space: nowrap; }
 
+/* ── resumable weight download deck ── */
+.weight-select {
+  flex: 1; min-width: 0; padding: 5px 8px;
+  font: 11px var(--mono); color: var(--ink);
+  background: var(--well); border: 1px solid var(--line); border-radius: 5px;
+}
+.weight-select:focus { outline: none; border-color: var(--amber); }
+.weight-progress {
+  height: 9px; margin: 6px 0 10px; overflow: hidden;
+  background: var(--well); border: 1px solid var(--line-soft); border-radius: 5px;
+}
+.weight-bar {
+  width: 0; height: 100%;
+  background: linear-gradient(90deg, var(--amber), var(--amber-hi));
+  box-shadow: 0 0 8px rgba(245, 165, 36, .35);
+  transition: width .25s ease;
+}
+.weight-status {
+  max-height: 190px; margin: 0 0 14px; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 11px/1.55 var(--mono); color: var(--teal);
+}
+
 @media (max-width: 760px) {
   .loader-row { grid-template-columns: minmax(0, 1fr); }
   .loader-flags { text-align: left; }

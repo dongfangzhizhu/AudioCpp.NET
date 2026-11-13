@@ -58,6 +58,40 @@
         <div class="group-list" id="modelList"></div>
       </article>
 
+      <article class="panel" style="--reveal:2">
+        <h2><i class="tick"></i>WEIGHT DOWNLOAD <span class="h2-cn">权重下载 · 断点续传</span></h2>
+        <div class="bay-tools">
+          <select class="mono weight-select" id="weightPackage" aria-label="选择模型包"></select>
+          <span class="mono dim" id="weightPackageCount">loading…</span>
+        </div>
+        <div class="bay-tools">
+          <button class="btn btn-mini" id="weightStart" type="button">⤓ 下载</button>
+          <button class="btn btn-mini" id="weightPause" type="button">⏸ 暂停</button>
+          <button class="btn btn-mini" id="weightResume" type="button">▶ 继续</button>
+          <button class="btn btn-mini" id="weightCancel" type="button">⨯ 取消</button>
+          <button class="btn btn-mini" id="weightInterrupt" type="button">⚡ 模拟断线</button>
+        </div>
+        <div class="weight-progress"><div class="weight-bar" id="weightBar"></div></div>
+        <pre class="mono weight-status" id="weightStatus">idle</pre>
+
+        <h3>RESUME DRILL <span class="h2-cn">续传演练 · 本地生成，不占外网</span></h3>
+        <div class="field-row">
+          <label class="field grow">
+            <span>Size <em>测试文件大小（字节）</em></span>
+            <input class="mono" id="weightTestSize" type="number" min="1" step="1024" value="8388608">
+          </label>
+          <label class="field w-sm">
+            <span>Abort at <em>断流位置</em></span>
+            <input class="mono" id="weightTestAbort" type="number" min="0" step="1024" value="3000000">
+          </label>
+        </div>
+        <div class="bay-tools">
+          <button class="btn btn-mini" id="weightTestStart" type="button">▶ 一键续传演练</button>
+          <button class="btn btn-mini" id="weightTestClean" type="button">⌫ 清理测试文件</button>
+        </div>
+        <pre class="mono weight-status" id="weightTestLog">先跑演练，服务端会在指定字节处断开；再点「继续」，观察从 .part 偏移续传并逐字节校验。</pre>
+      </article>
+
       <article class="panel" style="--reveal:3">
         <h2><i class="tick"></i>ABI &amp; TASK CATALOG <span class="h2-cn">能力与任务目录</span></h2>
         <div class="bay-tools">

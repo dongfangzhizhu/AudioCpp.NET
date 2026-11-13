@@ -2,9 +2,10 @@
 
 .NET 10 bindings for [audio.cpp](https://github.com/0xShug0/audio.cpp), using a small versioned C ABI shim over `engine_runtime`.
 
-> Status: wraps every model family the pinned engine defines — 134 `model_specs`
-> families produce 137 linked loaders and a 137-entry catalog (134 + 3 bundled VADs),
-> with 421 downloadable packages. Verified on four platform cells:
+> Status: wraps every model family the pinned engine defines — 143 `model_specs`
+> families, 446 downloadable packages and 18 task tokens. The linked loader count is
+> re-measured from the shipping shim at release time (previous pin: 137 loaders =
+> 134 + 3 bundled VADs). Release evidence for the previous pin covers four platform cells:
 > Windows/Linux × CPU/CUDA, plus Windows/Linux × Vulkan. See
 > [`docs/verification/release-readiness.md`](docs/verification/release-readiness.md)
 > for the evidence. The upstream source is pinned; this repository never builds an
@@ -31,8 +32,12 @@ dotnet run --project src/AudioCpp.NET.Console -- models download <id> --models-d
 
 ## Pinned upstream
 
-- Repository: `https://github.com/0xShug0/audio.cpp`
-- Commit: `be3d36ed7315260e5a9752f7e8e3e0de9af18567` (`v0.9.3-60-gbe3d36ed`)
+- Upstream: `https://github.com/0xShug0/audio.cpp`
+- Pinned repository (fork): `https://github.com/dongfangzhizhu/audio.cpp`
+- Commit: `4be37c28f4f51c2b191c8587e38debd41c7dd626` (`v0.9.3-156-g4be37c28`)
+- Fork additions on top of upstream `33ca47fc`: `HF_ENDPOINT` mirror fallback and
+  Windows system CA store loading for package downloads (see ADR-0002 for why the pin
+  lives on the fork).
 - Lock file: [`eng/upstream.lock.json`](eng/upstream.lock.json)
 - License: Apache-2.0 (Copyright 2026 ShugoAI LLC) — see [`NOTICE`](NOTICE)
 
@@ -208,6 +213,40 @@ loader that advertises a `streaming` mode for the requested task (in this pinned
 build: `silero_vad` plus the wake-word detectors `micro_wake_word` and
 `sherpa_kws`), and every one of those loaders accepts 16 kHz input only.
 
+### Resumable weight downloads
+
+The **WEIGHT DOWNLOAD** panel downloads one package by id from the pinned
+`model_specs` catalog. These are pure HTTP transfers (no native shim call), so a
+download can run alongside an inference request. Each file is streamed into
+`<target>.part` in byte-range chunks, with a `<target>.part.meta` sidecar holding
+the URL, ETag and total size. A pause, cancel, dropped connection, injected
+interrupt or process restart resumes from the bytes already on disk; a `200`
+reply to a range request or a changed ETag discards the partial file and restarts
+from zero instead of splicing incompatible bytes.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/weights/packages` | catalog: id, family, repo, revision, target directory, files |
+| `POST /api/weights/download` | `{ "packageId": "...", "overwrite": false }` |
+| `GET /api/weights/jobs`, `GET /api/weights/jobs/{id}` | state, offsets, range requests, restarts |
+| `POST /api/weights/jobs/{id}/pause\|resume\|cancel\|interrupt` | control a transfer |
+| `GET` / `POST /api/weights/config` | chunk size, rate limit, fault injection |
+| `POST /api/weights/test/start`, `GET /api/weights/test/verify`, `POST /api/weights/test/clean` | local drill, byte-for-byte check, cleanup |
+
+**RESUME DRILL** (the button in the UI, or the script below) uses
+`/api/weights/test-source/…`, an in-process source serving a deterministic blob
+with real `206` / `Content-Range` / `ETag` semantics that can cut the TCP stream
+at a chosen byte. It needs no external network and never fetches multi-gigabyte
+weights, so the resume path can be exercised repeatedly:
+
+```powershell
+# terminal 1 (the script defaults to this address)
+dotnet run --project src/AudioCpp.NET.Web --urls http://127.0.0.1:62029
+# terminal 2 — 8 checks: dropped connection, pause/resume, cancel/resume,
+# injected interrupt, server ignoring Range, changed ETag, real package id
+python eng/Test-WeightResume.py --base http://127.0.0.1:62029
+```
+
 The workbench serves `wwwroot` from the output directory, so run the built
 executable from its own folder (or use `dotnet run`, which sets the content root
 to the project).
@@ -244,7 +283,7 @@ cmake -S . -B build/native-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
 cmake --build build/native-cpu --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke audiocpp_dotnet_e2e --parallel
 ```
 
-`AUDIOCPP_MODEL_SET` accepts `full` (all 134 families, the default and what releases
+`AUDIOCPP_MODEL_SET` accepts `full` (all 143 families, the default and what releases
 use), `core` (engine only, no model loaders — used by the CI ABI gate) and `custom`
 (an explicit `-DAUDIOCPP_MODELS=...` list).
 

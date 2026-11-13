@@ -31,7 +31,7 @@ namespace {
 // pin check (CMakeLists.txt), the ABI smoke test, the managed integration test
 // and eng/upstream.lock.json all assert the same value, and
 // eng/packaging/stage-native.ps1 reads it back out of the built library.
-constexpr const char * kCommit = "be3d36ed7315260e5a9752f7e8e3e0de9af18567";
+constexpr const char * kCommit = "4be37c28f4f51c2b191c8587e38debd41c7dd626";
 #ifdef AUDIOCPP_DOTNET_BACKEND
 constexpr const char * kBackend = AUDIOCPP_DOTNET_BACKEND;
 #else
