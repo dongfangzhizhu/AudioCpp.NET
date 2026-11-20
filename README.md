@@ -2,8 +2,8 @@
 
 .NET 10 bindings for [audio.cpp](https://github.com/0xShug0/audio.cpp), using a small versioned C ABI shim over `engine_runtime`.
 
-> Status: wraps every model family the pinned engine defines — 143 `model_specs`
-> families, 446 downloadable packages and 18 task tokens. The linked loader count is
+> Status: wraps every model family the pinned engine defines — 150 `model_specs`
+> families, 465 downloadable packages and 18 task tokens. The linked loader count is
 > re-measured from the shipping shim at release time (previous pin: 137 loaders =
 > 134 + 3 bundled VADs). Release evidence for the previous pin covers four platform cells:
 > Windows/Linux × CPU/CUDA, plus Windows/Linux × Vulkan. See
@@ -283,7 +283,7 @@ cmake -S . -B build/native-cpu -G Ninja -DCMAKE_BUILD_TYPE=Release `
 cmake --build build/native-cpu --target audiocpp_dotnet_native audiocpp_dotnet_abi_smoke audiocpp_dotnet_e2e --parallel
 ```
 
-`AUDIOCPP_MODEL_SET` accepts `full` (all 143 families, the default and what releases
+`AUDIOCPP_MODEL_SET` accepts `full` (all 150 families, the default and what releases
 use), `core` (engine only, no model loaders — used by the CI ABI gate) and `custom`
 (an explicit `-DAUDIOCPP_MODELS=...` list).
 
