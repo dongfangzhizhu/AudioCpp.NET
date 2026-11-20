@@ -100,7 +100,7 @@ def main():
             print(f"FATAL: expected 1 .so, got {so}")
             sys.exit(1)
         so_bytes = z.read(so[0])
-    pin = b"4be37c28f4f51c2b191c8587e38debd41c7dd626"
+    pin = b"509929537ae6a673ab20cc2080e69d9e514559c3"
     print(f"so: {so[0]}  {len(so_bytes):,} B  embedded pin: {pin in so_bytes}")
     if pin not in so_bytes:
         print("FATAL: embedded pin mismatch")

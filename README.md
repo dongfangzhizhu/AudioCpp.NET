@@ -34,8 +34,8 @@ dotnet run --project src/AudioCpp.NET.Console -- models download <id> --models-d
 
 - Upstream: `https://github.com/0xShug0/audio.cpp`
 - Pinned repository (fork): `https://github.com/dongfangzhizhu/audio.cpp`
-- Commit: `4be37c28f4f51c2b191c8587e38debd41c7dd626` (`v0.9.3-156-g4be37c28`)
-- Fork additions on top of upstream `33ca47fc`: `HF_ENDPOINT` mirror fallback and
+- Commit: `509929537ae6a673ab20cc2080e69d9e514559c3` (`v0.9.5-43-g50992953`)
+- Fork additions on top of upstream `29b37ddb`: `HF_ENDPOINT` mirror fallback and
   Windows system CA store loading for package downloads (see ADR-0002 for why the pin
   lives on the fork).
 - Lock file: [`eng/upstream.lock.json`](eng/upstream.lock.json)
